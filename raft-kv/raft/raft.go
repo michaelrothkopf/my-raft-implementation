@@ -358,9 +358,9 @@ func (rf *Raft) subscribeHeartbeats(peerId int) {
 	defer ticker.Stop()
 
 	for {
-		// Ensure we are leader before sending another
 		rf.mu.Lock()
-		if rf.state != Leader {
+		// Ensure we are leader and alive before sending another
+		if rf.state != Leader || rf.killed {
 			rf.mu.Unlock()
 			return
 		}
@@ -375,8 +375,8 @@ func (rf *Raft) subscribeHeartbeats(peerId int) {
 // sendAppendEntryAndHandleResponse (goroutine) sends a heartbeat message and handles its response
 func (rf *Raft) sendAppendEntryAndHandleResponse(peerId int) {
 	rf.mu.Lock()
-	// Ensure we are leader (stale send prevention)
-	if rf.state != Leader {
+	// Ensure we are leader and not dead (stale send prevention)
+	if rf.state != Leader || rf.killed {
 		rf.mu.Unlock()
 		return
 	}
@@ -417,13 +417,23 @@ func (rf *Raft) sendAppendEntryAndHandleResponse(peerId int) {
 func (rf *Raft) Kill() {
 	rf.mu.Lock()
 	rf.killed = true
+	// We will become a follower once revived; assume we are no longer leader to prevent testing errors
+	rf.state = Follower
 	rf.mu.Unlock()
 }
 
 // Revive revives the node from the dead
 func (rf *Raft) Revive() {
 	rf.mu.Lock()
+
 	rf.killed = false
+
+	// Restore volatile state to simulate being rebooted
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
+
 	rf.mu.Unlock()
 }
 
