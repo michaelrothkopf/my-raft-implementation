@@ -52,6 +52,8 @@ type Raft struct {
 
 	// Channel to apply committed commands to the state machine
 	applyCh				chan ApplyMsg
+	// Cond to listen for changes to the state machine
+	applyCond			*sync.Cond
 	
 	// Server is down
 	killed 				bool
@@ -102,11 +104,50 @@ func NewRaft(id int, peers []int, transport RPCTransport, currentTerm int, voted
 		killed: false,
 	}
 
+	raft.applyCh = make(chan ApplyMsg)
+	raft.applyCond = sync.NewCond(&raft.mu)
+
 	raft.resetElectionTimer()
 
 	go raft.runElectionTimer()
+	go raft.applyChangesToStateMachineLoop()
 
 	return raft
+}
+
+func (rf *Raft) applyChangesToStateMachineLoop() {
+	rf.mu.Lock()
+	myGeneration := rf.generation
+	rf.mu.Unlock()
+
+	for {
+		// Wait until we are ready to commit new messages
+		rf.mu.Lock()
+		for rf.commitIndex <= rf.lastApplied {
+			if rf.killed || rf.generation != myGeneration {
+				rf.mu.Unlock()
+				return
+			}
+			rf.applyCond.Wait()
+		}
+
+		// Collect the new entries to be sent to the channel
+		var toApply []LogEntry
+		for rf.lastApplied < rf.commitIndex {
+			rf.lastApplied++
+			toApply = append(toApply, rf.log[rf.lastApplied])
+		}
+		rf.mu.Unlock()
+
+		// Send them through the channel under unlocked mutex
+		for _, entry := range toApply {
+			rf.applyCh <- ApplyMsg{
+				CommandValid: true,
+				Command: entry.Command,
+				CommandIndex: entry.Index,
+			}
+		}
+	}
 }
 
 // getRandomElectionTimeout is a helper function that gets a random time.Duration between MinimumElectionTimeout and MaximumElectionTimeout
@@ -405,6 +446,7 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs) (*AppendEntriesRepl
 	if args.LeaderCommit > rf.commitIndex {
 		last := len(rf.log) - 1
 		rf.commitIndex = min(args.LeaderCommit, last)
+		rf.applyCond.Broadcast() // apply new committed commands to state machine
 	}
 
 	// Return yes
@@ -509,6 +551,7 @@ func (rf *Raft) advanceCommitIndexLocked() {
 
 		if count > len(rf.peers) / 2 {
 			rf.commitIndex = i
+			rf.applyCond.Broadcast() // pass the newly committed commands to the channel
 			return
 		}
 	}
@@ -601,6 +644,8 @@ func (rf *Raft) Kill() {
 	rf.state = Follower
 	// We have been killed; when revived, we will be part of the next generation
 	rf.generation++
+	// Release the state machine application loop
+	rf.applyCond.Broadcast()
 	rf.mu.Unlock()
 }
 
@@ -623,6 +668,7 @@ func (rf *Raft) Revive() {
 	rf.mu.Unlock()
 
 	go rf.runElectionTimer()
+	go rf.applyChangesToStateMachineLoop()
 }
 
 // GetState gets the state of the node
