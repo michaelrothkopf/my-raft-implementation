@@ -10,6 +10,7 @@ This implementation uses Go. I'm trying to avoid third-party libraries outside o
     - 📂 `raft/` Raft implementation and tests (independent of newtorking protocol)
         - 📄 `raft.go` Implementations for the Raft logic
         - 📄 `rpc.go` Interfaces for RPC transport layer to implement
+        - 📄 `raft_test.go` Testing for the core Raft logic
     - 📂 `sim/` Simulated network for early testing
         - 📄 `network.go` A simple fake network handler to manage node communication
         - 📄 `transport.go` A fake network compatible RPC implementation to interface with Raft
