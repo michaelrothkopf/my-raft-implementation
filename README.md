@@ -1,6 +1,6 @@
 # My Raft Implementation
 
-A simple implementation of the Raft protocol for consensus among distribtued server nodes.
+A simple implementation of the Raft protocol for consensus among distribtued server nodes when storing key-value pairs.
 
 This implementation uses Go. I'm trying to avoid third-party libraries outside of the standard library.
 
@@ -21,3 +21,10 @@ This implementation uses Go. I'm trying to avoid third-party libraries outside o
 I decided to make this project to learn more about consensus and distributed networks as I actively research distributed LLMs and hosting with the First State AI Institute at the University of Delaware.
 
 I close-read the [Raft paper](https://raft.github.io/raft.pdf) and some supplemental materials before I designed my programm. I also looked into Paxos to understand the motivation behind Raft.
+
+I am developing this system in stages.
+1. Election logic and healing
+2. Log replication
+3. Persistence and crash recovery
+4. Log compaction (snapshotting)
+5. KV service API (hopefully REST-based)
