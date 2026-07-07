@@ -424,3 +424,8 @@ func (rf *Raft) Revive() {
 func (rf *Raft) GetState() RaftState {
 	return rf.state
 }
+
+// GetCurrentTerm gets the current term of the node
+func (rf *Raft) GetCurrentTerm() int {
+	return rf.currentTerm
+}
