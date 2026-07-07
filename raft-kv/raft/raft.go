@@ -49,16 +49,12 @@ type Raft struct {
 
 	// Votes received in the current election
 	votesReceived		int
+
+	// Channel to apply committed commands to the state machine
+	applyCh				chan ApplyMsg
 	
 	// Server is down
 	killed 				bool
-}
-
-// LogEntry represents a command and its position in the term and index spaces
-type LogEntry struct {
-	Term		int
-	Index		int
-	Command		[]byte
 }
 
 // NewRaft creates a new node

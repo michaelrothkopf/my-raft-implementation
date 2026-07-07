@@ -18,13 +18,33 @@ type RequestVoteReply struct {
 	VoteGranted	bool
 }
 
+// LogEntry represents a command and its position in the term and index spaces
+type LogEntry struct {
+	Term		int
+	Index		int
+	Command		[]byte
+}
+
+type ApplyMsg struct {
+	CommandValid	bool
+	Command			[]byte
+	CommandIndex	int
+}
+
 type AppendEntriesArgs struct {
-	Term 		int
-	LeaderId	int
-	// No other fields for voting system
+	Term 			int
+	LeaderId		int
+	PrevLogIndex	int
+	PrevLogTerm		int
+	Entries			[]LogEntry
+	LeaderCommit	int
 }
 
 type AppendEntriesReply struct {
-	Term	int
-	Success	bool
+	Term			int
+	Success			bool
+
+	// Lets leader skip backward faster when there is a conflict
+	ConflictIndex	int
+	ConflictTerm	int
 }
