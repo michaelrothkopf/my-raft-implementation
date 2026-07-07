@@ -415,6 +415,7 @@ func (rf *Raft) becomeLeaderLocked() {
 	// Initialize nextIndex and matchIndex
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
+	rf.matchIndex[rf.me] = len(rf.log) - 1
 	for peerId := range rf.nextIndex {
 		rf.nextIndex[peerId] = len(rf.log)
 	}
@@ -473,7 +474,7 @@ func (rf *Raft) findLastIndexOfTerm(term int) int {
 // Precondition: mutex locked
 func (rf *Raft) advanceCommitIndexLocked() {
 	// Search from the end of the log
-	for i := len(rf.log) - 1; i >= 0; i-- {
+	for i := len(rf.log) - 1; i >= rf.commitIndex; i-- {
 		if rf.log[i].Term != rf.currentTerm {
 			continue
 		}
@@ -535,6 +536,11 @@ func (rf *Raft) sendAppendEntryAndHandleResponse(peerId int) {
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
+	// Ignore stale replies here in case we lost leadership
+	if (rf.killed || rf.state != Leader || rf.currentTerm != term) {
+		return
+	}
 
 	// If we are outdated
 	if reply.Term > rf.currentTerm {
