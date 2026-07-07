@@ -69,6 +69,12 @@ func NewRaft(id int, peers []int, transport RPCTransport, currentTerm int, voted
 	nextIndex := make([]int, len(peers))
 	matchIndex := make([]int, len(peers))
 
+	// Add sentinel to beginning
+	// ensures len(rf.log) - 1 is always a valid index
+	if len(log_copy) == 0 {
+		log_copy = append(log_copy, LogEntry{ Term: 0, Index: 0, Command: nil})
+	}
+
 	raft := &Raft{
 		me: id,
 		peers: peers_copy,
@@ -102,6 +108,28 @@ func NewRaft(id int, peers []int, transport RPCTransport, currentTerm int, voted
 func getRandomElectionTimeout() time.Duration {
 	timeoutMilliseconds := rand.Intn(MaximumElectionTimeout - MinimumElectionTimeout + 1) + MinimumElectionTimeout
 	return time.Duration(timeoutMilliseconds) * time.Millisecond
+}
+
+// Start submits a command to be entered into the log
+// Precondition: node must be leader
+// Returns (index, term, isLeader); let the caller know the state of the node
+func (rf *Raft) Start(command []byte) (int, int, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if rf.state != Leader {
+		return -1, -1, false
+	}
+
+	index := len(rf.log)
+	entry := LogEntry{
+		Term: rf.currentTerm,
+		Index: index,
+		Command: command,
+	}
+	rf.log = append(rf.log, entry)
+
+	return index, rf.currentTerm, true
 }
 
 // resetElectionTimer resets the election timer to a new random value
@@ -326,7 +354,12 @@ func (rf *Raft) becomeLeaderLocked() {
 
 	rf.state = Leader
 
-	// TODO: volatile leader fields
+	// Initialize nextIndex and matchIndex
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
+	for peerId := range rf.nextIndex {
+		rf.nextIndex[peerId] = len(rf.log) - 1
+	}
 
 	// Stop election timer (no election timer as Leader)
 	if !rf.electionTimer.Stop() {
