@@ -90,6 +90,8 @@ func NewRaft(id int, peers []int, transport RPCTransport, currentTerm int, voted
 
 		votesReceived: 0,
 
+		electionTimer: time.NewTimer(getRandomElectionTimeout()),
+
 		killed: false,
 	}
 
@@ -98,6 +100,12 @@ func NewRaft(id int, peers []int, transport RPCTransport, currentTerm int, voted
 	go raft.runElectionTimer()
 
 	return raft
+}
+
+// getRandomElectionTimeout is a helper function that gets a random time.Duration between MinimumElectionTimeout and MaximumElectionTimeout
+func getRandomElectionTimeout() time.Duration {
+	timeoutMilliseconds := rand.Intn(MaximumElectionTimeout - MinimumElectionTimeout + 1) + MinimumElectionTimeout
+	return time.Duration(timeoutMilliseconds) * time.Millisecond
 }
 
 // resetElectionTimer resets the election timer to a new random value
@@ -118,8 +126,7 @@ func (rf *Raft) resetElectionTimerLocked() {
 		}
 	}
 
-	timeoutMilliseconds := rand.Intn(MaximumElectionTimeout - MinimumElectionTimeout + 1) + MinimumElectionTimeout
-	rf.electionTimer.Reset(time.Duration(timeoutMilliseconds) * time.Millisecond)
+	rf.electionTimer.Reset(getRandomElectionTimeout())
 }
 
 // runElectionTimer (goroutine) sleeps until the timeout, checks if an election should start
@@ -221,8 +228,7 @@ func (rf *Raft) sendRequestVoteAndHandleReply(peerId int) {
 		rf.state = Follower
 		rf.currentTerm = reply.Term
 		rf.votedFor = -1
-
-		// Reset the election timer; we already have mutex, so call an unlocked version
+		
 		rf.resetElectionTimerLocked()
 		return
 	}
@@ -273,6 +279,7 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs) (*RequestVoteReply, boo
 	voteGranted := false
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 		voteGranted = true
+		rf.votedFor = args.CandidateId
 		rf.resetElectionTimerLocked()
 	}
 
@@ -422,10 +429,14 @@ func (rf *Raft) Revive() {
 
 // GetState gets the state of the node
 func (rf *Raft) GetState() RaftState {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	return rf.state
 }
 
 // GetCurrentTerm gets the current term of the node
 func (rf *Raft) GetCurrentTerm() int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	return rf.currentTerm
 }
