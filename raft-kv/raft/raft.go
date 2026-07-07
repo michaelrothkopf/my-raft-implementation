@@ -40,8 +40,8 @@ type Raft struct {
 	state				RaftState
 
 	// Volatile state (leaders only)
-	nextIndex			[]int
-	matchIndex			[]int
+	nextIndex			map[int]int
+	matchIndex			map[int]int
 
 	// Action timers
 	electionTimer		*time.Timer
@@ -55,6 +55,7 @@ type Raft struct {
 	
 	// Server is down
 	killed 				bool
+	generation			int // utility; not strictly necessary in real implementation, but for fake network, allows Raft to keep track of if it has been restarted, protecting electionTimer from race conditions
 }
 
 // NewRaft creates a new node
@@ -66,8 +67,12 @@ func NewRaft(id int, peers []int, transport RPCTransport, currentTerm int, voted
 	copy(log_copy, log)
 
 	// Create leader volatile slices
-	nextIndex := make([]int, len(peers))
-	matchIndex := make([]int, len(peers))
+	nextIndex := make(map[int]int)
+	matchIndex := make(map[int]int)
+	for _, id := range peers_copy {
+		nextIndex[id] = 0
+		matchIndex[id] = 0
+	}
 
 	// Add sentinel to beginning
 	// ensures len(rf.log) - 1 is always a valid index
@@ -155,6 +160,11 @@ func (rf *Raft) resetElectionTimerLocked() {
 
 // runElectionTimer (goroutine) sleeps until the timeout, checks if an election should start
 func (rf *Raft) runElectionTimer() {
+	// Snapshot our generation
+	rf.mu.Lock()
+	myGeneration := rf.generation
+	rf.mu.Unlock()
+
 	for {
 		rf.mu.Lock()
 		// If server killed, exit
@@ -171,10 +181,10 @@ func (rf *Raft) runElectionTimer() {
 		<-ch
 		rf.mu.Lock()
 
-		// If killed or won, do nothing
-		if rf.killed || rf.state == Leader {
+		// If killed, won, or changed generation, the timer is no longer needed
+		if rf.killed || rf.state == Leader || rf.generation != myGeneration {
 			rf.mu.Unlock()
-			continue
+			return
 		}
 
 		// Timer expired; start election
@@ -413,12 +423,13 @@ func (rf *Raft) becomeLeaderLocked() {
 	rf.state = Leader
 
 	// Initialize nextIndex and matchIndex
-	rf.nextIndex = make([]int, len(rf.peers))
-	rf.matchIndex = make([]int, len(rf.peers))
-	rf.matchIndex[rf.me] = len(rf.log) - 1
-	for peerId := range rf.nextIndex {
+	rf.nextIndex = make(map[int]int)
+	rf.matchIndex = make(map[int]int)
+	for _, peerId := range rf.peers {
 		rf.nextIndex[peerId] = len(rf.log)
+		rf.matchIndex[peerId] = 0
 	}
+	rf.matchIndex[rf.me] = len(rf.log) - 1
 
 	// Stop election timer (no election timer as Leader)
 	if !rf.electionTimer.Stop() {
@@ -440,6 +451,11 @@ func (rf *Raft) becomeLeaderLocked() {
 
 // subscribeHeartbeats (goroutine) sends heartbeat messages at intervals to another node as the leader
 func (rf *Raft) subscribeHeartbeats(peerId int) {
+	// Snapshot our generation
+	rf.mu.Lock()
+	myGeneration := rf.generation
+	rf.mu.Unlock()
+
 	// Send a heartbeat message until no longer leader
 	ticker := time.NewTicker(time.Duration(HeartbeatInterval) * time.Millisecond)
 
@@ -447,8 +463,8 @@ func (rf *Raft) subscribeHeartbeats(peerId int) {
 
 	for {
 		rf.mu.Lock()
-		// Ensure we are leader and alive before sending another
-		if rf.state != Leader || rf.killed {
+		// Ensure we are leader, alive, and in the same generation before sending another
+		if rf.state != Leader || rf.killed || rf.generation != myGeneration {
 			rf.mu.Unlock()
 			return
 		}
@@ -481,7 +497,7 @@ func (rf *Raft) advanceCommitIndexLocked() {
 
 		count := 1
 
-		for peer := range rf.peers {
+		for _, peer := range rf.peers {
 			if peer == rf.me {
 				continue
 			}
@@ -574,8 +590,6 @@ func (rf *Raft) sendAppendEntryAndHandleResponse(peerId int) {
 
 		// Check commit index
 		rf.advanceCommitIndexLocked()
-
-		return
 	}
 }
 
@@ -585,11 +599,14 @@ func (rf *Raft) Kill() {
 	rf.killed = true
 	// We will become a follower once revived; assume we are no longer leader to prevent testing errors
 	rf.state = Follower
+	// We have been killed; when revived, we will be part of the next generation
+	rf.generation++
 	rf.mu.Unlock()
 }
 
 // Revive revives the node from the dead
 func (rf *Raft) Revive() {
+	// note: state marked persistent is intentionally preserved
 	rf.mu.Lock()
 
 	rf.killed = false
@@ -598,8 +615,8 @@ func (rf *Raft) Revive() {
 	// Restore volatile state to simulate being rebooted
 	rf.commitIndex = 0
 	rf.lastApplied = 0
-	rf.nextIndex = make([]int, len(rf.peers))
-	rf.matchIndex = make([]int, len(rf.peers))
+	rf.nextIndex = make(map[int]int)
+	rf.matchIndex = make(map[int]int)
 
 	rf.resetElectionTimerLocked()
 
