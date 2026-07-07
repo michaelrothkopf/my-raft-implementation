@@ -593,6 +593,7 @@ func (rf *Raft) Revive() {
 	rf.mu.Lock()
 
 	rf.killed = false
+	rf.state = Follower
 
 	// Restore volatile state to simulate being rebooted
 	rf.commitIndex = 0
@@ -600,7 +601,11 @@ func (rf *Raft) Revive() {
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
 
+	rf.resetElectionTimerLocked()
+
 	rf.mu.Unlock()
+
+	go rf.runElectionTimer()
 }
 
 // GetState gets the state of the node
