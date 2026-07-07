@@ -320,13 +320,18 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs) (*AppendEntriesRepl
 		return nil, false
 	}
 
-	// If stuck in the past
+	// If leader is stuck in the past
 	if args.Term < rf.currentTerm {
 		return &AppendEntriesReply{
 			Term: rf.currentTerm,
 			Success: false,
+			ConflictIndex: -1,
+			ConflictTerm: -1,
 		}, true
 	}
+
+	// Valid leader, reset timer
+	rf.resetElectionTimerLocked()
 
 	// Otherwise, valid leader
 	// If we are stuck in the past
@@ -336,15 +341,68 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs) (*AppendEntriesRepl
 		rf.votedFor = -1
 	}
 
-	// TODO: add log entry
+	// Destroy candidacy if present, we have a valid leader
+	if rf.state != Follower {
+		rf.state = Follower
+	}
 
-	// Reset timer
-	rf.resetElectionTimerLocked()
+	// Before addition, check previous to ensure compatibility
+	// Log index does not exist
+	if args.PrevLogIndex >= len(rf.log) {
+		return &AppendEntriesReply{
+			Term: rf.currentTerm,
+			Success: false,
+			ConflictIndex: len(rf.log),
+			ConflictTerm: -1,
+		}, true
+	}
+	// Index exists, but term does not match
+	if args.PrevLogIndex >= 0 && rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+		// Conflict term is the term of this log's value at the index the leader thinks we match
+		conflictTerm := rf.log[args.PrevLogIndex].Term
+		// Must crawl back conflict index to find the first index in the conflict term
+		conflictIndex := args.PrevLogIndex
+		for conflictIndex > 0 && rf.log[conflictIndex - 1].Term == conflictTerm {
+			conflictIndex--
+		}
+
+		return &AppendEntriesReply{
+			Term: rf.currentTerm,
+			Success: false,
+			ConflictIndex: conflictIndex,
+			ConflictTerm: conflictTerm,
+		}, true
+	}
+
+	// Everything matches; append the logs
+	logIndex := args.PrevLogIndex + 1
+	for entryIndex := 0; entryIndex < len(args.Entries); entryIndex++ {
+		if logIndex >= len(rf.log) {
+			rf.log = append(rf.log, args.Entries[entryIndex:]...)
+			break
+		}
+
+		if rf.log[logIndex].Term != args.Entries[entryIndex].Term {
+			rf.log = rf.log[:logIndex]
+			rf.log = append(rf.log, args.Entries[entryIndex:]...)
+			break
+		}
+
+		logIndex++
+	}
+
+	// Update the commit index
+	if args.LeaderCommit > rf.commitIndex {
+		last := len(rf.log) - 1
+		rf.commitIndex = min(args.LeaderCommit, last)
+	}
 
 	// Return yes
 	return &AppendEntriesReply{
 		Term: rf.currentTerm,
 		Success: true,
+		ConflictIndex: -1,
+		ConflictTerm: -1,
 	}, true
 }
 
@@ -358,7 +416,7 @@ func (rf *Raft) becomeLeaderLocked() {
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
 	for peerId := range rf.nextIndex {
-		rf.nextIndex[peerId] = len(rf.log) - 1
+		rf.nextIndex[peerId] = len(rf.log)
 	}
 
 	// Stop election timer (no election timer as Leader)
@@ -401,6 +459,44 @@ func (rf *Raft) subscribeHeartbeats(peerId int) {
 	}
 }
 
+// findLastIndexOfTerm finds the last absolute log index containing a value in the given term
+func (rf *Raft) findLastIndexOfTerm(term int) int {
+	for i := len(rf.log) - 1; i >= 0; i-- {
+		if rf.log[i].Term == term {
+			return i
+		}
+	}
+	return -1
+}
+
+// advanceCommitIndexLocked advances the commit index to its latest point
+// Precondition: mutex locked
+func (rf *Raft) advanceCommitIndexLocked() {
+	// Search from the end of the log
+	for i := len(rf.log) - 1; i >= 0; i-- {
+		if rf.log[i].Term != rf.currentTerm {
+			continue
+		}
+
+		count := 1
+
+		for peer := range rf.peers {
+			if peer == rf.me {
+				continue
+			}
+
+			if rf.matchIndex[peer] >= i {
+				count++
+			}
+		}
+
+		if count > len(rf.peers) / 2 {
+			rf.commitIndex = i
+			return
+		}
+	}
+}
+
 // sendAppendEntryAndHandleResponse (goroutine) sends a heartbeat message and handles its response
 func (rf *Raft) sendAppendEntryAndHandleResponse(peerId int) {
 	rf.mu.Lock()
@@ -410,7 +506,13 @@ func (rf *Raft) sendAppendEntryAndHandleResponse(peerId int) {
 		return
 	}
 
-	// Get the args for the heartbeat manager
+	// Get the log entries that need to be sent
+	logsToSend := append([]LogEntry(nil), rf.log[rf.nextIndex[peerId]:]...) // make copy
+	prevLogIndex := rf.nextIndex[peerId] - 1
+	prevLogTerm := rf.log[prevLogIndex].Term
+
+	// Get other args for the message
+	commitIndex := rf.commitIndex
 	term := rf.currentTerm
 	leaderId := rf.me
 	rf.mu.Unlock()
@@ -419,6 +521,11 @@ func (rf *Raft) sendAppendEntryAndHandleResponse(peerId int) {
 	reply, success := rf.transport.CallAppendEntries(peerId, &AppendEntriesArgs{
 		Term: term,
 		LeaderId: leaderId,
+
+		PrevLogIndex: prevLogIndex,
+		PrevLogTerm: prevLogTerm,
+		Entries: logsToSend,
+		LeaderCommit: commitIndex,
 	})
 
 	// Failure means the node is down, ignore
@@ -437,9 +544,33 @@ func (rf *Raft) sendAppendEntryAndHandleResponse(peerId int) {
 		rf.votedFor = -1
 		// Reinstate the timer
 		rf.resetElectionTimerLocked()
+		// Return out (we are done being leader, unnecessary to process state)
+		return
 	}
 	
-	// TODO: implement log additions; for now, voting is set up and heartbeats reset the timers
+	// If the follower did not succeed in accepting the data, update that follower's missing info
+	if !reply.Success {
+		// ConflictTerm is -1 (sentinel, missing index)
+		if reply.ConflictTerm == -1 {
+			rf.nextIndex[peerId] = reply.ConflictIndex
+		} else {
+			// ConflictTerm is some previous term, find its index and update to that
+			last := rf.findLastIndexOfTerm(reply.ConflictTerm)
+			if last >= 0 {
+				rf.nextIndex[peerId] = last + 1
+			} else {
+				rf.nextIndex[peerId] = reply.ConflictIndex
+			}
+		}
+	} else {
+		rf.matchIndex[peerId] = prevLogIndex + len(logsToSend)
+		rf.nextIndex[peerId] = rf.matchIndex[peerId] + 1
+
+		// Check commit index
+		rf.advanceCommitIndexLocked()
+
+		return
+	}
 }
 
 // Kill kills the node
