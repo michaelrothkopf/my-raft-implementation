@@ -419,3 +419,8 @@ func (rf *Raft) Revive() {
 	rf.killed = false
 	rf.mu.Unlock()
 }
+
+// GetState gets the state of the node
+func (rf *Raft) GetState() RaftState {
+	return rf.state
+}
