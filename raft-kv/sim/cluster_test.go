@@ -263,3 +263,59 @@ func TestFollowerPropagationPostPartition(t *testing.T) {
 		}
 	}
 }
+
+func TestFollowerPropagationPostRevive(t *testing.T) {
+	tc := newTestCluster(3)
+
+	// Allow it to select a leader
+	time.Sleep(1 * time.Second)
+
+	// Kill someone
+	tc.nodes[2].Kill()
+
+	// Allow a new leader to be selected
+	time.Sleep(1 * time.Second)
+
+	// Get the new leader
+	leaders := tc.leaders()
+	// Should be only one leader
+	if len(leaders) != 1 {
+		t.Fatalf("expected exactly 1 leader, got %d (%v)", len(leaders), leaders)
+	}
+	// Get the leader
+	leaderId := leaders[0]
+
+	// Send some commands
+	commands := [][]byte{
+		[]byte("Zanzibar"),
+		[]byte("Stiletto"),
+		[]byte("52nd Street"),
+		[]byte("A Matter of Trust"),
+		[]byte("Goodnight Saigon"),
+	}
+	for _, command := range commands {
+		tc.nodes[leaderId].Start(command)
+	}
+	
+	// Allow the commands to propagate
+	time.Sleep(500 * time.Millisecond)
+
+	// Revive the dead
+	tc.nodes[2].Revive()
+
+	// Allow the commands to propagate
+	time.Sleep(500 * time.Millisecond)
+
+	// Ensure node 2 has the commands in the correct order
+	for i := range commands {
+		select {
+		case message := <-tc.nodes[2].GetApplyChannel():
+			if !bytes.Equal(message.Command, commands[i]) {
+				t.Fatalf("previously dead node did not have expected command %s at index %d, had %s instead", commands[i], i, message.Command)
+			}
+		// Timeout case
+		case <-time.After(1 * time.Second):
+			t.Errorf("previously dead node did not receive any commands (error occurred on index %d)", i)
+		}
+	}
+}
