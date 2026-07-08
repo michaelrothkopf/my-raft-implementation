@@ -4,6 +4,7 @@ package raft
 type RPCTransport interface {
 	CallRequestVote(peerId int, args *RequestVoteArgs) (*RequestVoteReply, bool)
 	CallAppendEntries(peerId int, args *AppendEntriesArgs) (*AppendEntriesReply, bool)
+	CallRequestPreVote(peerId int, args *RequestPreVoteArgs) (*RequestPreVoteReply, bool)
 }
 
 type RequestVoteArgs struct {
@@ -47,4 +48,16 @@ type AppendEntriesReply struct {
 	// Lets leader skip backward faster when there is a conflict
 	ConflictIndex	int
 	ConflictTerm	int
+}
+
+type RequestPreVoteArgs struct {
+	Term			int
+	CandidateId		int
+	LastLogIndex	int
+	LastLogTerm		int
+}
+
+type RequestPreVoteReply struct {
+	Term			int
+	VoteGranted		bool
 }

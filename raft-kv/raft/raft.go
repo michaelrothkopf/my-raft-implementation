@@ -49,6 +49,8 @@ type Raft struct {
 
 	// Votes received in the current election
 	votesReceived		int
+	preVotesReceived	int
+	preVoteTerm			int
 
 	// Channel to apply committed commands to the state machine
 	applyCh				chan ApplyMsg
@@ -228,10 +230,64 @@ func (rf *Raft) runElectionTimer() {
 			return
 		}
 
-		// Timer expired; start election
-		rf.startElectionLocked()
+		// Timer expired; start pre-election
+		rf.startPreVoteLocked()
 
 		rf.mu.Unlock()
+	}
+}
+
+// startPreVoteLocked runs a pre-election to prevent unnecessary term increases for impossible elections
+func (rf *Raft) startPreVoteLocked() {
+	rf.preVoteTerm = rf.currentTerm + 1
+	rf.preVotesReceived = 1
+	lastLogIndex := len(rf.log) - 1
+	lastLogTerm := rf.log[lastLogIndex].Term
+
+	for _, peerId := range rf.peers {
+		if peerId == rf.me {
+			continue
+		}
+		go rf.sendPreVoteAndHandleReply(peerId, rf.preVoteTerm, lastLogIndex, lastLogTerm)
+	}
+}
+
+// sendPreVoteAndHandleReply (goroutine) sends the prevote message and handles whether to start a real election
+func (rf *Raft) sendPreVoteAndHandleReply(peerId, preVoteTerm, lastLogIndex, lastLogTerm int) {
+	rf.mu.Lock()
+	if rf.killed || rf.state == Leader {
+		rf.mu.Unlock()
+		return
+	}
+
+	me := rf.me
+	rf.mu.Unlock()
+
+	reply, success := rf.transport.CallRequestPreVote(peerId, &RequestPreVoteArgs{
+		Term: preVoteTerm,
+		CandidateId: me,
+		LastLogIndex: lastLogIndex,
+		LastLogTerm: lastLogTerm,
+	})
+
+	if !success {
+		return
+	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if rf.killed || rf.state == Leader || rf.preVoteTerm != preVoteTerm {
+		return
+	}
+
+	if reply.VoteGranted {
+		rf.preVotesReceived++
+		// Only run the election on the winning vote
+		if rf.preVotesReceived == len(rf.peers) / 2 + 1 {
+			// Run an election
+			rf.startElectionLocked()
+		}
 	}
 }
 
@@ -317,14 +373,47 @@ func (rf *Raft) sendRequestVoteAndHandleReply(peerId int) {
 	if reply.VoteGranted {
 		rf.votesReceived++
 
-		// If we have won
-		if rf.votesReceived > len(rf.peers) / 2 {
+		// Only become leader on the winning vote
+		if rf.votesReceived == len(rf.peers) / 2 + 1{
 			rf.becomeLeaderLocked()
 		}
 	}
 }
 
-// handleRequestVote (RPC recipient) handles a request for a vote from another node
+// HandlePreVote (RPC recipient) handles a request for a prevote from another node
+func (rf *Raft) HandleRequestPreVote(args *RequestPreVoteArgs) (*RequestPreVoteReply, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// Run the same checks as for request vote but do not change own state no matter what
+	// If we are dead, do nothing
+	if rf.killed {
+		return nil, false
+	}
+
+	// If we are in a newer term, reject
+	if args.Term < rf.currentTerm {
+		return &RequestPreVoteReply{
+			Term: rf.currentTerm,
+			VoteGranted: false,
+		}, true
+	}
+
+	// Skip older term state update
+
+	// Ensure candidate's log is up to date
+	if ((args.LastLogIndex < len(rf.log) - 1) && args.LastLogTerm == rf.log[len(rf.log) - 1].Term) || args.LastLogTerm < rf.log[len(rf.log) - 1].Term {
+		return &RequestPreVoteReply{
+			Term: rf.currentTerm,
+			VoteGranted: false,
+		}, true
+	}
+
+	// Grant the vote
+	return &RequestPreVoteReply{Term: rf.currentTerm, VoteGranted: true}, true
+}
+
+// HandleRequestVote (RPC recipient) handles a request for a vote from another node
 func (rf *Raft) HandleRequestVote(args *RequestVoteArgs) (*RequestVoteReply, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -349,8 +438,15 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs) (*RequestVoteReply, boo
 		rf.votedFor = -1
 	}
 
+	// Ensure the candidate's log is at least as up to date as ours
+	if ((args.LastLogIndex < len(rf.log) - 1) && args.LastLogTerm == rf.log[len(rf.log) - 1].Term) || args.LastLogTerm < rf.log[len(rf.log) - 1].Term {
+		return &RequestVoteReply{
+			Term: rf.currentTerm,
+			VoteGranted: false,
+		}, true
+	}
+
 	// Grant the vote if we haven't voted this term
-	// TODO: add condition for log up-to-date before voting
 	voteGranted := false
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 		voteGranted = true
@@ -362,7 +458,7 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs) (*RequestVoteReply, boo
 	return &RequestVoteReply{Term: rf.currentTerm, VoteGranted: voteGranted}, true
 }
 
-// handleAppendEntries (RPC recipient) handles an append entries RPC from another node
+// HandleAppendEntries (RPC recipient) handles an append entries RPC from another node
 func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs) (*AppendEntriesReply, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()

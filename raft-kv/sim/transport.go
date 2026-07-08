@@ -24,3 +24,8 @@ func (nt *FakeNetworkTransport) CallRequestVote(peerId int, args *raft.RequestVo
 func (nt *FakeNetworkTransport) CallAppendEntries(peerId int, args *raft.AppendEntriesArgs) (*raft.AppendEntriesReply, bool) {
 	return nt.network.CallAppendEntries(nt.me, peerId, args)
 }
+
+// CallRequestPreVote passes through to the network using own id as from
+func (nt *FakeNetworkTransport) CallRequestPreVote(peerId int, args *raft.RequestPreVoteArgs) (*raft.RequestPreVoteReply, bool) {
+	return nt.network.CallRequestPreVote(nt.me, peerId, args)
+}

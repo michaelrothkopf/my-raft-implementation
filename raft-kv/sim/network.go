@@ -97,3 +97,20 @@ func (n *FakeNetwork) CallAppendEntries(from, to int, args *raft.AppendEntriesAr
 	// Pass through
 	return node.HandleAppendEntries(args)
 }
+
+// CallRequestPreVote passes an RequestPreVote RPC through
+func (n *FakeNetwork) CallRequestPreVote(from, to int, args *raft.RequestPreVoteArgs) (*raft.RequestPreVoteReply, bool) {
+	// TODO: simulate delay
+	
+	// Check availability
+	n.mu.Lock()
+	reachable := n.isReachableLocked(from, to)
+	node, ok := n.nodes[to]
+	n.mu.Unlock()
+	if !reachable || !ok {
+		return nil, false
+	}
+
+	// Pass through
+	return node.HandleRequestPreVote(args)
+}
