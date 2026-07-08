@@ -27,7 +27,7 @@ func newTestCluster(n int) *testCluster {
 	nodes := make(map[int]*raft.Raft)
 	for _, id := range ids {
 		transport := NewFakeNetworkTransport(network, id)
-		node := raft.NewRaft(id, ids, transport, 0, -1, nil)
+		node := raft.NewRaftWithoutPersistence(id, ids, transport, 0, -1, nil)
 		nodes[id] = node
 		network.RegisterNode(id, node)
 	}

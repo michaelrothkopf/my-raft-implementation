@@ -31,7 +31,7 @@ func TestGetRandomElectionTimeout(t *testing.T) {
 }
 
 func TestHandleRequestVote_RejectsStaleTerm(t *testing.T) {
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 5, -1, nil)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 5, -1, nil)
 
 	reply, ok := rf.HandleRequestVote(&RequestVoteArgs{
 		Term: 3, // lower than CurrentTerm; should reject
@@ -50,7 +50,7 @@ func TestHandleRequestVote_RejectsStaleTerm(t *testing.T) {
 }
 
 func TestHandleRequestVote_RejectsKilled(t *testing.T) {
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 5, 2, nil)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 5, 2, nil)
 	rf.Kill()
 	_, ok := rf.HandleRequestVote(&RequestVoteArgs{
 		Term: 3, // lower than CurrentTerm; should reject
@@ -62,7 +62,7 @@ func TestHandleRequestVote_RejectsKilled(t *testing.T) {
 }
 
 func TestHandleRequestVote_RejectsNonFirstVoteInTerm(t *testing.T) {
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 5, 3, nil)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 5, 3, nil)
 
 	reply, ok := rf.HandleRequestVote(&RequestVoteArgs{
 		Term: 5,
@@ -78,7 +78,7 @@ func TestHandleRequestVote_RejectsNonFirstVoteInTerm(t *testing.T) {
 }
 
 func TestHandleRequestVote_GrantsFirstVoteInTerm(t *testing.T) {
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 5, -1, nil)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 5, -1, nil)
 
 	reply, ok := rf.HandleRequestVote(&RequestVoteArgs{
 		Term: 5,
@@ -94,7 +94,7 @@ func TestHandleRequestVote_GrantsFirstVoteInTerm(t *testing.T) {
 }
 
 func TestHandleRequestVote_GrantsFirstVoteInHigherTerm(t *testing.T) {
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 5, -1, nil)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 5, -1, nil)
 
 	reply, ok := rf.HandleRequestVote(&RequestVoteArgs{
 		Term: 6,
@@ -110,7 +110,7 @@ func TestHandleRequestVote_GrantsFirstVoteInHigherTerm(t *testing.T) {
 }
 
 func TestHandleRequestVote_GrantsNonFirstVoteInHigherTerm(t *testing.T) {
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 5, 3, nil)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 5, 3, nil)
 
 	reply, ok := rf.HandleRequestVote(&RequestVoteArgs{
 		Term: 6,
@@ -126,7 +126,7 @@ func TestHandleRequestVote_GrantsNonFirstVoteInHigherTerm(t *testing.T) {
 }
 
 func TestHandleRequestPreVote_RejectsKilled(t *testing.T) {
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 5, 2, nil)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 5, 2, nil)
 	rf.Kill()
 	_, ok := rf.HandleRequestPreVote(&RequestPreVoteArgs{
 		Term: 6,
@@ -140,7 +140,7 @@ func TestHandleRequestPreVote_RejectsKilled(t *testing.T) {
 }
 
 func TestHandleRequestPreVote_RejectsOlderTerm(t *testing.T) {
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 5, 2, nil)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 5, 2, nil)
 	reply, ok := rf.HandleRequestPreVote(&RequestPreVoteArgs{
 		Term: 4,
 		CandidateId: 2,
@@ -162,7 +162,7 @@ func TestHandleRequestPreVote_RejectsOutOfDateLogByTerm(t *testing.T) {
 		{Term:2,Index:2,Command:[]byte("")},
 		{Term:2,Index:3,Command:[]byte("")},
 	}
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
 	reply, ok := rf.HandleRequestPreVote(&RequestPreVoteArgs{
 		Term: 3,
 		CandidateId: 2,
@@ -184,7 +184,7 @@ func TestHandleRequestPreVote_RejectsOutOfDateLogByIndex(t *testing.T) {
 		{Term:2,Index:2,Command:[]byte("")},
 		{Term:2,Index:3,Command:[]byte("")},
 	}
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
 	reply, ok := rf.HandleRequestPreVote(&RequestPreVoteArgs{
 		Term: 3,
 		CandidateId: 2,
@@ -206,7 +206,7 @@ func TestHandleRequestPreVote_GrantsNewerTerm(t *testing.T) {
 		{Term:2,Index:2,Command:[]byte("")},
 		{Term:2,Index:3,Command:[]byte("")},
 	}
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
 	reply, ok := rf.HandleRequestPreVote(&RequestPreVoteArgs{
 		Term: 3,
 		CandidateId: 2,
@@ -228,7 +228,7 @@ func TestHandleRequestPreVote_GrantsGoodLogLength(t *testing.T) {
 		{Term:2,Index:2,Command:[]byte("")},
 		{Term:2,Index:3,Command:[]byte("")},
 	}
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
 	reply, ok := rf.HandleRequestPreVote(&RequestPreVoteArgs{
 		Term: 3,
 		CandidateId: 2,
@@ -244,7 +244,7 @@ func TestHandleRequestPreVote_GrantsGoodLogLength(t *testing.T) {
 }
 
 func TestHandleAppendEntries_RejectsKilled(t *testing.T) {
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, nil)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, nil)
 	rf.Kill()
 	_, ok := rf.HandleAppendEntries(&AppendEntriesArgs{
 		Term: 0,
@@ -266,7 +266,7 @@ func TestHandleAppendEntries_FailsOutdatedTerm(t *testing.T) {
 		{Term:2,Index:2,Command:[]byte("")},
 		{Term:2,Index:3,Command:[]byte("")},
 	}
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
 	reply, ok := rf.HandleAppendEntries(&AppendEntriesArgs{
 		Term: 1,
 		LeaderId: 1,
@@ -290,7 +290,7 @@ func TestHandleAppendEntries_SubmitsToNewerTerm(t *testing.T) {
 		{Term:2,Index:2,Command:[]byte("")},
 		{Term:2,Index:3,Command:[]byte("")},
 	}
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
 	rf.state = Candidate
 	reply, ok := rf.HandleAppendEntries(&AppendEntriesArgs{
 		Term: 3,
@@ -321,7 +321,7 @@ func TestHandleAppendEntries_FailsWithOwnLogMissingIndex(t *testing.T) {
 		{Term:2,Index:2,Command:[]byte("")},
 		{Term:2,Index:3,Command:[]byte("")},
 	}
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
 	reply, ok := rf.HandleAppendEntries(&AppendEntriesArgs{
 		Term: 2,
 		LeaderId: 1,
@@ -348,7 +348,7 @@ func TestHandleAppendEntries_FailsWithTermMismatch(t *testing.T) {
 		{Term:2,Index:2,Command:[]byte("")},
 		{Term:2,Index:3,Command:[]byte("")},
 	}
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
 	reply, ok := rf.HandleAppendEntries(&AppendEntriesArgs{
 		Term: 3,
 		LeaderId: 1,
@@ -378,7 +378,7 @@ func TestHandleAppendEntries_SuceedsWithValidNewEntries(t *testing.T) {
 		{Term:2,Index:2,Command:[]byte("")},
 		{Term:2,Index:3,Command:[]byte("")},
 	}
-	rf := NewRaft(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
+	rf := NewRaftWithoutPersistence(0, []int{0, 1, 2}, &dummyTransport{}, 2, -1, log)
 	reply, ok := rf.HandleAppendEntries(&AppendEntriesArgs{
 		Term: 2,
 		LeaderId: 1,

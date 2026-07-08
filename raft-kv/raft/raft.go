@@ -30,6 +30,7 @@ type Raft struct {
 	transport			RPCTransport
 	
 	// Persistent state
+	persister			PersistenceProvider
 	currentTerm			int
 	votedFor			int
 	log					[]LogEntry
@@ -62,8 +63,8 @@ type Raft struct {
 	generation			int // utility; not strictly necessary in real implementation, but for fake network, allows Raft to keep track of if it has been restarted, protecting electionTimer from race conditions
 }
 
-// NewRaft creates a new node
-func NewRaft(id int, peers []int, transport RPCTransport, currentTerm int, votedFor int, log []LogEntry) *Raft {
+// NewRaftWithoutPersistence creates a new node
+func NewRaftWithoutPersistence(id int, peers []int, transport RPCTransport, currentTerm int, votedFor int, log []LogEntry) *Raft {
 	// Deep copy all slices
 	peersCopy := make([]int, len(peers))
 	copy(peersCopy, peers)
@@ -88,7 +89,7 @@ func NewRaft(id int, peers []int, transport RPCTransport, currentTerm int, voted
 	// Add sentinel to beginning
 	// ensures len(rf.log) - 1 is always a valid index
 	if len(logCopy) == 0 {
-		logCopy = append(logCopy, LogEntry{ Term: 0, Index: 0, Command: nil})
+		logCopy = append(logCopy, LogEntry{ Term: 0, Index: 0, Command: nil })
 	}
 
 	raft := &Raft{
@@ -122,6 +123,27 @@ func NewRaft(id int, peers []int, transport RPCTransport, currentTerm int, voted
 	go raft.applyChangesToStateMachineLoop()
 
 	return raft
+}
+
+// NewRaft constructs a new Raft
+func NewRaft(id int, peers []int, transport RPCTransport, persister PersistenceProvider) *Raft {
+	// Load state from the persister
+	state, err := persister.Load()
+	if err != nil {
+		panic("failed to load persistent state with error " + err.Error())
+	}
+
+	// Call the parameterized constructor
+	return NewRaftWithoutPersistence(id, peers, transport, state.CurrentTerm, state.VotedFor, state.Log)
+}
+
+// persistLocked saves the data to the persister
+func (rf *Raft) persistLocked() {
+	rf.persister.Save(PersistentState{
+		CurrentTerm: rf.currentTerm,
+		VotedFor: rf.votedFor,
+		Log: rf.log,
+	})
 }
 
 func (rf *Raft) applyChangesToStateMachineLoop() {
@@ -183,6 +205,7 @@ func (rf *Raft) Start(command []byte) (int, int, bool) {
 		Command: append([]byte(nil), command...),
 	}
 	rf.log = append(rf.log, entry)
+	rf.persistLocked()
 
 	return index, rf.currentTerm, true
 }
@@ -307,6 +330,7 @@ func (rf *Raft) startElectionLocked() {
 	rf.state = Candidate
 	rf.votedFor = rf.me
 	rf.votesReceived = 1
+	rf.persistLocked()
 
 	// Reset election timer
 	rf.resetElectionTimerLocked()
@@ -366,6 +390,7 @@ func (rf *Raft) sendRequestVoteAndHandleReply(peerId int) {
 		rf.state = Follower
 		rf.currentTerm = reply.Term
 		rf.votedFor = -1
+		rf.persistLocked()
 		
 		rf.resetElectionTimerLocked()
 		return
@@ -443,6 +468,7 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs) (*RequestVoteReply, boo
 		rf.currentTerm = args.Term
 		rf.state = Follower
 		rf.votedFor = -1
+		rf.persistLocked()
 	}
 
 	// Ensure the candidate's log is at least as up to date as ours
@@ -458,6 +484,7 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs) (*RequestVoteReply, boo
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 		voteGranted = true
 		rf.votedFor = args.CandidateId
+		rf.persistLocked()
 		rf.resetElectionTimerLocked()
 	}
 
@@ -493,6 +520,7 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs) (*AppendEntriesRepl
 		rf.currentTerm = args.Term
 		rf.state = Follower
 		rf.votedFor = -1
+		rf.persistLocked()
 	}
 
 	// Destroy candidacy if present, we have a valid leader
@@ -714,6 +742,7 @@ func (rf *Raft) sendAppendEntryAndHandleResponse(peerId int) {
 		rf.currentTerm = reply.Term
 		rf.state = Follower
 		rf.votedFor = -1
+		rf.persistLocked()
 		// Reinstate the timer
 		rf.resetElectionTimerLocked()
 		// Return out (we are done being leader, unnecessary to process state)
