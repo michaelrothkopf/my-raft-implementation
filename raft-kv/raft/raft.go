@@ -65,33 +65,40 @@ type Raft struct {
 // NewRaft creates a new node
 func NewRaft(id int, peers []int, transport RPCTransport, currentTerm int, votedFor int, log []LogEntry) *Raft {
 	// Deep copy all slices
-	peers_copy := make([]int, len(peers))
-	copy(peers_copy, peers)
-	log_copy := make([]LogEntry, len(log))
-	copy(log_copy, log)
+	peersCopy := make([]int, len(peers))
+	copy(peersCopy, peers)
+	logCopy := make([]LogEntry, len(log))
+	// Ensure deep copy of bytes in log entry
+	for i, logEntry := range log {
+		logCopy[i] = LogEntry{
+			Term: logEntry.Term,
+			Index: logEntry.Index,
+			Command: append([]byte(nil), logEntry.Command...),
+		}
+	}
 
 	// Create leader volatile slices
 	nextIndex := make(map[int]int)
 	matchIndex := make(map[int]int)
-	for _, id := range peers_copy {
+	for _, id := range peersCopy {
 		nextIndex[id] = 0
 		matchIndex[id] = 0
 	}
 
 	// Add sentinel to beginning
 	// ensures len(rf.log) - 1 is always a valid index
-	if len(log_copy) == 0 {
-		log_copy = append(log_copy, LogEntry{ Term: 0, Index: 0, Command: nil})
+	if len(logCopy) == 0 {
+		logCopy = append(logCopy, LogEntry{ Term: 0, Index: 0, Command: nil})
 	}
 
 	raft := &Raft{
 		me: id,
-		peers: peers_copy,
+		peers: peersCopy,
 		transport: transport,
 
 		currentTerm: currentTerm,
 		votedFor: votedFor,
-		log: log_copy,
+		log: logCopy,
 
 		commitIndex: 0,
 		lastApplied: 0,
