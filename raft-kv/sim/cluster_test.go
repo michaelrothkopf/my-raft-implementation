@@ -1,6 +1,7 @@
 package sim
 
 import (
+	"bytes"
 	"slices"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ func newTestCluster(n int) *testCluster {
 	}
 }
 
-// leaders returns all of the nodes who currently believe that they are the leader
+// leaders returns the ids of all of the nodes who currently believe that they are the leader
 func (tc *testCluster) leaders() []int {
 	var result []int
 	for id, node := range tc.nodes {
@@ -140,5 +141,125 @@ func TestPartitionReelection(t *testing.T) {
 		}
 	} else if minorityLeaders != 0 {
 		t.Fatalf("expected no leaders in minority partition, got %d", minorityLeaders)
+	}
+}
+
+// TestBasicAgreement tests that a cluster of nodes under ideal conditions replicates the messages exactly and in the correct order
+func TestBasicAgreement(t *testing.T) {
+	tc := newTestCluster(5)
+
+	// Allow leader selection
+	time.Sleep(1 * time.Second)
+
+	// Find the leader
+	leaders := tc.leaders()
+	if len(leaders) != 1 {
+		t.Fatalf("expected exactly one leader, got %d: %v", len(leaders), leaders)
+	}
+	leader := tc.nodes[leaders[0]]
+
+	// Ensure the leader accepts the message
+	index, _, isLeader := leader.Start([]byte("Go Your Own Way")) // idx 0
+	if !isLeader {
+		t.Fatalf("leader node is not leader; did not accept command")
+	}
+	if index != 1 {
+		t.Fatalf("command not indexed as first command (sentinel is 0, index should be 1, got index is %d)", index)
+	}
+
+	// Send some messages to the leader
+	commands := [][]byte{
+		[]byte("Go Your Own Way"), // duplicate for easier checking code; does not get double added
+		[]byte("Say That You Love Me"),
+		[]byte("Dreams"),
+		[]byte("The Chain"),
+		[]byte("Landslide"),
+		[]byte("Silver Springs"),
+	}
+	for id, command := range commands {
+		if id == 0 {
+			continue
+		}
+		leader.Start(command)
+	}
+
+	// Allow the messages to propagate
+	time.Sleep(500 * time.Millisecond)
+
+	// Drain applyCh for each node to ensure parity
+	for id := range tc.ids {
+		for i := range commands {
+			select {
+			case message := <-tc.nodes[id].GetApplyChannel():
+				if !bytes.Equal(message.Command, commands[i]) {
+					t.Fatalf("expected message \"%s\" at index %d but got \"%s\" instead", commands[i], i, message.Command)
+				}
+			// Timeout case
+			case <-time.After(1 * time.Second):
+				t.Errorf("node %d never applied command index %d", id, i)
+			}
+		}
+	}
+}
+
+// TestFollowerPropagationPostPartition tests that a previously partitioned node successfully receives messages that were sent while it slept
+func TestFollowerPropagationPostPartition(t *testing.T) {
+	tc := newTestCluster(3)
+
+	// Allow it to select a leader
+	time.Sleep(1 * time.Second)
+
+	// Partition a follower away
+	groupA, groupB := []int{0, 1}, []int{2}
+	tc.network.Partition(groupA, groupB)
+
+	// Allow a new leader to be selected
+	time.Sleep(1 * time.Second)
+
+	// Get the new leader
+	leaders := tc.leaders()
+	// Must ensure leaderId is from larger partition (remains leaderId, commands will not be dropped)
+	var leaderId int
+	if len(leaders) > 1 && leaders[0] == 2 {
+		leaderId = leaders[1]
+	} else {
+		leaderId = leaders[0]
+	}
+	if leaderId == 2 {
+		t.Fatalf("only leader is in small partition")
+	}
+
+	// Send some commands
+	commands := [][]byte{
+		[]byte("Zanzibar"),
+		[]byte("Stiletto"),
+		[]byte("52nd Street"),
+		[]byte("A Matter of Trust"),
+		[]byte("Goodnight Saigon"),
+	}
+	for _, command := range commands {
+		tc.nodes[leaderId].Start(command)
+	}
+
+	// Allow them to propagate
+	time.Sleep(500 * time.Millisecond)
+
+	// Heal the network
+	tc.network.Heal()
+
+	// Allow them to propagate
+	time.Sleep(500 * time.Millisecond)
+
+	// Ensure node 2 has the commands in the correct order
+	for i := range commands {
+		select {
+		case message := <-tc.nodes[2].GetApplyChannel():
+			if !bytes.Equal(message.Command, commands[i]) {
+				t.Fatalf("previously separated node did not have expected command %s at index %d, had %s instead", commands[i], i, message.Command)
+			}
+		// Timeout case
+		case <-time.After(1 * time.Second):
+			t.Errorf("previously separated node did not receive any commands (error occurred on index %d)", i)
+		}
 	}
 }
