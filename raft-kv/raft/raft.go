@@ -171,7 +171,7 @@ func (rf *Raft) Start(command []byte) (int, int, bool) {
 	entry := LogEntry{
 		Term: rf.currentTerm,
 		Index: index,
-		Command: command,
+		Command: append([]byte(nil), command...),
 	}
 	rf.log = append(rf.log, entry)
 
@@ -568,6 +568,10 @@ func (rf *Raft) sendAppendEntryAndHandleResponse(peerId int) {
 
 	// Get the log entries that need to be sent
 	logsToSend := append([]LogEntry(nil), rf.log[rf.nextIndex[peerId]:]...) // make copy
+	// Deep copy byte arrays to ensure each node gets a fresh copy of each LogEntry
+	for i := range logsToSend {
+		logsToSend[i].Command = append([]byte(nil), logsToSend[i].Command...)
+	}
 	prevLogIndex := rf.nextIndex[peerId] - 1
 	prevLogTerm := rf.log[prevLogIndex].Term
 
@@ -683,4 +687,9 @@ func (rf *Raft) GetCurrentTerm() int {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	return rf.currentTerm
+}
+
+// GetApplyChannel gets the output channel for applied commands
+func (rf *Raft) GetApplyChannel() (chan ApplyMsg) {
+	return rf.applyCh
 }
