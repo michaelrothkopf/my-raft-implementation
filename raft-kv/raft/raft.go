@@ -2,6 +2,7 @@ package raft
 
 import (
 	"math/rand"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -171,6 +172,16 @@ func (rf *Raft) lastLogIndex() int {
 	return rf.lastLogIndexLocked()
 }
 
+// becomeFollowerLocked safely becomes a follower (checks if we were leader before; if so, we must restart the election timer)
+func (rf *Raft) becomeFollowerLocked() {
+	oldState := rf.state
+	rf.state = Follower
+	// If we are leader, must restart the election timer
+	if oldState == Leader {
+		go rf.runElectionTimer()
+	}
+}
+
 // persistLocked saves the persistent state variables to the persister
 func (rf *Raft) persistLocked() {
 	rf.persister.Save(PersistentState{
@@ -237,7 +248,7 @@ func (rf *Raft) Start(command []byte) (int, int, bool) {
 		return -1, -1, false
 	}
 
-	index := len(rf.log)
+	index := rf.lastLogIndexLocked() + 1
 	entry := LogEntry{
 		Term: rf.currentTerm,
 		Index: index,
@@ -261,7 +272,7 @@ func (rf *Raft) Snapshot(index int, snapshotData []byte) {
 
 	// Can't snapshot future commands
 	if index > rf.lastLogIndexLocked() {
-		panic("Raft.Snapshot called with out-of-bounds log index")
+		panic("Raft.Snapshot called with out-of-bounds log index (Snapshot index: " + strconv.Itoa(index) + ", last log index: " + strconv.Itoa(rf.lastLogIndexLocked()) + ")")
 	}
 
 	// Discard the log
@@ -271,6 +282,7 @@ func (rf *Raft) Snapshot(index int, snapshotData []byte) {
 	newLog = append(newLog, newSentinel)
 	newLog = append(newLog, rf.log[sliceStart+1:]...)
 	rf.log = newLog
+	rf.persistLocked()
 
 	// Save the snapshot to persistent storage
 	rf.persistSnapshotLocked(snapshotData)
@@ -326,8 +338,13 @@ func (rf *Raft) runElectionTimer() {
 			return
 		}
 
-		// Timer expired; start pre-election
-		rf.startPreVoteLocked()
+		if len(rf.peers) == 1 {
+			// If we are in a debug scenario with one node, we don't need an election; declare ourselves the winner
+			rf.becomeLeaderLocked()
+		} else {
+			// Otherwise, start a preelection as usual
+			rf.startPreVoteLocked()
+		}
 
 		rf.mu.Unlock()
 	}
@@ -453,7 +470,7 @@ func (rf *Raft) sendRequestVoteAndHandleReply(peerId int) {
 
 	// If peer has higher term, we may not run; abandon election
 	if reply.Term > rf.currentTerm {
-		rf.state = Follower
+		rf.becomeFollowerLocked()
 		rf.currentTerm = reply.Term
 		rf.votedFor = -1
 		rf.persistLocked()
@@ -534,7 +551,7 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs) (*RequestVoteReply, boo
 	// If we are in an older term, don't vote yet
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
-		rf.state = Follower
+		rf.becomeFollowerLocked()
 		rf.votedFor = -1
 		rf.persistLocked()
 	}
@@ -588,23 +605,33 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs) (*AppendEntriesRepl
 	// If we are stuck in the past
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
-		rf.state = Follower
+		rf.becomeFollowerLocked()
 		rf.votedFor = -1
 		rf.persistLocked()
 	}
 
 	// Destroy candidacy if present, we have a valid leader
 	if rf.state != Follower {
-		rf.state = Follower
+		rf.becomeFollowerLocked()
+	}
+
+	// Check if we snapshotted something the leader is unaware we snapshotted
+	if args.PrevLogIndex < rf.log[0].Index {
+		return &AppendEntriesReply{
+			Term: rf.currentTerm,
+			Success: false,
+			ConflictIndex: rf.log[0].Index + 1,
+			ConflictTerm: -1,
+		}, true
 	}
 
 	// Before addition, check previous to ensure compatibility
 	// Log index does not exist
-	if args.PrevLogIndex >= len(rf.log) {
+	if args.PrevLogIndex > rf.lastLogIndexLocked() {
 		return &AppendEntriesReply{
 			Term: rf.currentTerm,
 			Success: false,
-			ConflictIndex: len(rf.log),
+			ConflictIndex: rf.lastLogIndexLocked() + 1,
 			ConflictTerm: -1,
 		}, true
 	}
@@ -629,14 +656,16 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs) (*AppendEntriesRepl
 	// Everything matches; append the logs
 	logIndex := args.PrevLogIndex + 1
 	for entryIndex := 0; entryIndex < len(args.Entries); entryIndex++ {
-		if logIndex >= len(rf.log) {
+		if logIndex >= rf.lastLogIndexLocked() {
 			rf.log = append(rf.log, args.Entries[entryIndex:]...)
+			rf.persistLocked()
 			break
 		}
 
 		if rf.log[rf.logIndexToMemoryIndexLocked(logIndex)].Term != args.Entries[entryIndex].Term {
 			rf.log = rf.log[:rf.logIndexToMemoryIndexLocked(logIndex)]
 			rf.log = append(rf.log, args.Entries[entryIndex:]...)
+			rf.persistLocked()
 			break
 		}
 
@@ -645,7 +674,7 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs) (*AppendEntriesRepl
 
 	// Update the commit index
 	if args.LeaderCommit > rf.commitIndex {
-		last := len(rf.log) - 1
+		last := rf.lastLogIndexLocked()
 		rf.commitIndex = min(args.LeaderCommit, last)
 		rf.applyCond.Broadcast() // apply new committed commands to state machine
 	}
@@ -681,7 +710,7 @@ func (rf *Raft) HandleInstallSnapshot(args *InstallSnapshotArgs) (*InstallSnapsh
 		rf.currentTerm = args.Term
 		rf.votedFor = -1
 	}
-	rf.state = Follower
+	rf.becomeFollowerLocked()
 	rf.resetElectionTimerLocked()
 	rf.persistLocked()
 
@@ -723,10 +752,10 @@ func (rf *Raft) becomeLeaderLocked() {
 	rf.nextIndex = make(map[int]int)
 	rf.matchIndex = make(map[int]int)
 	for _, peerId := range rf.peers {
-		rf.nextIndex[peerId] = len(rf.log)
+		rf.nextIndex[peerId] = rf.lastLogIndexLocked() + 1
 		rf.matchIndex[peerId] = 0
 	}
-	rf.matchIndex[rf.me] = len(rf.log) - 1
+	rf.matchIndex[rf.me] = rf.lastLogIndexLocked()
 
 	// Stop election timer (no election timer as Leader)
 	if !rf.electionTimer.Stop() {
@@ -773,8 +802,9 @@ func (rf *Raft) subscribeHeartbeats(peerId int) {
 	}
 }
 
-// findLastIndexOfTerm finds the last log index containing a value in the given term
-func (rf *Raft) findLastIndexOfTerm(term int) int {
+// findLastIndexOfTermLocked finds the last log index containing a value in the given term
+// Precondition: mutex locked
+func (rf *Raft) findLastIndexOfTermLocked(term int) int {
 	for i := len(rf.log) - 1; i >= 0; i-- {
 		if rf.log[i].Term == term {
 			return rf.log[i].Index
@@ -787,9 +817,9 @@ func (rf *Raft) findLastIndexOfTerm(term int) int {
 // Precondition: mutex locked
 func (rf *Raft) advanceCommitIndexLocked() {
 	// Search from the end of the log
-	for i := len(rf.log) - 1; i >= rf.commitIndex; i-- {
+	for i := rf.lastLogIndexLocked(); i > rf.commitIndex; i-- {
 		// Ensure we are processing log data in the correct term
-		if rf.log[i].Term != rf.currentTerm {
+		if rf.log[rf.logIndexToMemoryIndexLocked(i)].Term != rf.currentTerm {
 			continue
 		}
 
@@ -863,7 +893,7 @@ func (rf *Raft) sendAppendEntryAndHandleResponse(peerId int) {
 		// If we are outdated, step down immediately
 		if reply.Term > rf.currentTerm {
 			rf.currentTerm = reply.Term
-			rf.state = Follower
+			rf.becomeFollowerLocked()
 			rf.votedFor = -1
 			rf.persistLocked()
 			rf.resetElectionTimerLocked()
@@ -920,7 +950,7 @@ func (rf *Raft) sendAppendEntryAndHandleResponse(peerId int) {
 	if reply.Term > rf.currentTerm {
 		// Override and step down
 		rf.currentTerm = reply.Term
-		rf.state = Follower
+		rf.becomeFollowerLocked()
 		rf.votedFor = -1
 		rf.persistLocked()
 		// Reinstate the timer
@@ -936,7 +966,7 @@ func (rf *Raft) sendAppendEntryAndHandleResponse(peerId int) {
 			rf.nextIndex[peerId] = reply.ConflictIndex
 		} else {
 			// ConflictTerm is some previous term, find its index and update to that
-			last := rf.findLastIndexOfTerm(reply.ConflictTerm)
+			last := rf.findLastIndexOfTermLocked(reply.ConflictTerm)
 			if last >= 0 {
 				rf.nextIndex[peerId] = last + 1
 			} else {
@@ -971,13 +1001,22 @@ func (rf *Raft) Revive() {
 	rf.mu.Lock()
 
 	rf.killed = false
-	rf.state = Follower
+	rf.state = Follower // do not call becomeFollowerLocked, we will run the election timer later
 
-	// Restore volatile state to simulate being rebooted
+	// Reset volatile state to simulate being rebooted
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 	rf.nextIndex = make(map[int]int)
 	rf.matchIndex = make(map[int]int)
+
+	// Restore persistent state using the persister
+	state, err := rf.persister.Load()
+	if err != nil {
+		panic("could not load persistent state when reviving node")
+	}
+	rf.currentTerm = state.CurrentTerm
+	rf.votedFor = state.VotedFor
+	rf.log = state.Log
 
 	rf.resetElectionTimerLocked()
 

@@ -2,6 +2,7 @@ package sim
 
 import (
 	"bytes"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -144,8 +145,8 @@ func TestPartitionReelection(t *testing.T) {
 	}
 }
 
-// TestBasicAgreement tests that a cluster of nodes under ideal conditions replicates the messages exactly and in the correct order
-func TestBasicAgreement(t *testing.T) {
+// TestBasicLogReplication tests that a cluster of nodes under ideal conditions replicates the messages exactly and in the correct order
+func TestBasicLogReplication(t *testing.T) {
 	tc := newTestCluster(5)
 
 	// Allow leader selection
@@ -348,5 +349,190 @@ func TestPersistenceTransferWithFreshNode(t *testing.T) {
 	})
 	if reply.VoteGranted {
 		t.Fatalf("new node voted without sentinel votedFor")
+	}
+}
+
+func TestSnapshotCapture(t *testing.T) {
+	persister := raft.NewMemoryPersister()
+	network := NewFakeNetwork()
+	ids := []int{0}
+	
+	transport := NewFakeNetworkTransport(network, 0)
+	node := raft.NewRaft(0, ids, transport, persister)
+	network.RegisterNode(0, node)
+
+	// Allow it to select itself as leader
+	time.Sleep(1 * time.Second)
+
+	if node.GetState() != raft.Leader {
+		t.Fatalf("node did not elect itself leader")
+	}
+
+	// Write some commands to the log
+	commands := [][]byte{
+		[]byte("Rainy Day People"),
+		[]byte("Talking In Your Sleep"),
+		[]byte("Beautiful"),
+		[]byte("Me and Bobby McGee"),
+		[]byte("If You Could Read My Mind"),
+	}
+	for _, command := range commands {
+		node.Start(command)
+	}
+
+	// Allow the commands to commit
+	time.Sleep(500 * time.Millisecond)
+
+	// Snapshot the commands
+	snapshotData := []byte("Snapshot Test Data")
+	node.Snapshot(5, snapshotData)
+
+	// Allow the snapshot to take effect
+	time.Sleep(500 * time.Millisecond)
+
+	// Ensure the data has been saved to the persister
+	actualSnapshotData, err := persister.LoadSnapshot()
+	if err != nil {
+		t.Fatalf("unable to load snapshot")
+	}
+	if !bytes.Equal(actualSnapshotData, snapshotData) {
+		t.Fatalf("snapshot data was not the data that was passed in (actual: %v)", actualSnapshotData)
+	}
+}
+
+func TestSnapshotPropagationPostPartition(t *testing.T) {
+	tc := newTestCluster(3)
+
+	// Substitute a node to extract its persister data
+	tc.network.nodes[2].Kill()
+	persister := raft.NewMemoryPersister()
+	tc.nodes[2] = raft.NewRaftWithoutReadingFromPersistence(2, tc.ids, NewFakeNetworkTransport(tc.network, 2), 0, -1, nil, persister)
+	tc.network.nodes[2] = tc.nodes[2]
+
+	// Allow it to select a leader
+	time.Sleep(1 * time.Second)
+
+	// Partition a follower away
+	groupA, groupB := []int{0, 1}, []int{2}
+	tc.network.Partition(groupA, groupB)
+
+	// Allow a new leader to be selected
+	time.Sleep(1 * time.Second)
+
+	// Get the new leader
+	leaders := tc.leaders()
+	// Must ensure leaderId is from larger partition (remains leaderId, commands will not be dropped)
+	var leaderId int
+	if len(leaders) > 1 && leaders[0] == 2 {
+		leaderId = leaders[1]
+	} else {
+		leaderId = leaders[0]
+	}
+	if leaderId == 2 {
+		t.Fatalf("only leader is in small partition")
+	}
+
+	// Send some commands
+	commands := [][]byte{
+		[]byte("Panama"),
+		[]byte("You Really Got Me"),
+		[]byte("Dance the Night Away"),
+		[]byte("Unchained"),
+		[]byte("Ain't Talkin' 'Bout Love"),
+	}
+	for _, command := range commands {
+		tc.nodes[leaderId].Start(command)
+	}
+
+	// Allow them to propagate
+	time.Sleep(500 * time.Millisecond)
+
+	// Snapshot the old data
+	snapshotData := []byte("Snapshot Test Data")
+	tc.nodes[leaderId].Snapshot(5, snapshotData)
+
+	// Allow the snapshot to propagate
+	time.Sleep(500 * time.Millisecond)
+
+	// Heal the network
+	tc.network.Heal()
+
+	// Allow the snapshot to propagate
+	time.Sleep(500 * time.Millisecond)
+
+	// Ensure that the snapshot data passed
+	actualSnapshotData, err := persister.LoadSnapshot()
+	if err != nil {
+		t.Fatalf("unable to load snapshot")
+	}
+	if !bytes.Equal(actualSnapshotData, snapshotData) {
+		t.Fatalf("snapshot data was not the data that was passed in (actual: %v)", actualSnapshotData)
+	}
+}
+
+func TestSnapshotPropagationPostRevive(t *testing.T) {
+	tc := newTestCluster(3)
+
+	// Substitute a node to extract its persister data
+	tc.network.nodes[2].Kill()
+	persister := raft.NewMemoryPersister()
+	tc.nodes[2] = raft.NewRaftWithoutReadingFromPersistence(2, tc.ids, NewFakeNetworkTransport(tc.network, 2), 0, -1, nil, persister)
+	tc.network.nodes[2] = tc.nodes[2]
+
+	// Allow it to select a leader
+	time.Sleep(1 * time.Second)
+
+	// Kill the third node
+	tc.nodes[2].Kill()
+
+	// Allow a new leader to be selected
+	time.Sleep(1 * time.Second)
+
+	// Get the new leader
+	leaders := tc.leaders()
+	// Verify leader exists
+	if len(leaders) != 1 {
+		for i, node := range tc.nodes {
+			fmt.Printf("node %d state: %d\n", i, node.GetState())
+		}
+		t.Fatalf("expected exactly one leader after death of third node, got %d (%v)", len(leaders), leaders)
+	}
+	leaderId := leaders[0]
+
+	// Send some commands
+	commands := [][]byte{
+		[]byte("Panama"),
+		[]byte("You Really Got Me"),
+		[]byte("Dance the Night Away"),
+		[]byte("Unchained"),
+		[]byte("Ain't Talkin' 'Bout Love"),
+	}
+	for _, command := range commands {
+		tc.nodes[leaderId].Start(command)
+	}
+
+	// Allow them to propagate
+	time.Sleep(500 * time.Millisecond)
+
+	// Snapshot the old data
+	snapshotData := []byte("Snapshot Test Data")
+	tc.nodes[leaderId].Snapshot(5, snapshotData)
+
+	// Allow the snapshot to propagate
+	time.Sleep(500 * time.Millisecond)
+
+	// Revive the node
+	tc.nodes[2].Revive()
+
+	// Allow the snapshot to propagate
+	time.Sleep(500 * time.Millisecond)
+
+	// Ensure that the snapshot data passed
+	actualSnapshotData, err := persister.LoadSnapshot()
+	if err != nil {
+		t.Fatalf("unable to load snapshot")
+	}
+	if !bytes.Equal(actualSnapshotData, snapshotData) {
+		t.Fatalf("snapshot data was not the data that was passed in (actual: %v)", actualSnapshotData)
 	}
 }
