@@ -54,6 +54,7 @@ func (n *FakeNetwork) Heal() {
 }
 
 // isReachableLocked determines whether a node is reachable
+// Precondition: mutex locked
 func (n *FakeNetwork) isReachableLocked(from, to int) bool {
 	reachable, ok := n.reachable[[2]int{from, to}]
 	// Set reachable by default
@@ -64,53 +65,45 @@ func (n *FakeNetwork) isReachableLocked(from, to int) bool {
 	return reachable
 }
 
-// CallRequestVote passes a RequestVote RPC through
-func (n *FakeNetwork) CallRequestVote(from, to int, args *raft.RequestVoteArgs) (*raft.RequestVoteReply, bool) {
+// isAllowed determines whether a node is reachable and exists
+func (n *FakeNetwork) isAllowed(from, to int) (*raft.Raft, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	reachable := n.isReachableLocked(from, to)
+	node, ok := n.nodes[to]
+	return node, (reachable && ok)
+}
+
+// CallRPC generically executes an RPC from one node to another
+func callRpc[Args any, Reply any](n *FakeNetwork, from, to int, args *Args, handler func(*raft.Raft, *Args) (*Reply, bool)) (*Reply, bool) {
 	// TODO: simulate delay
 	
 	// Check availability
-	n.mu.Lock()
-	reachable := n.isReachableLocked(from, to)
-	node, ok := n.nodes[to]
-	n.mu.Unlock()
-	if !reachable || !ok {
+	node, allowed := n.isAllowed(from, to)
+	if !allowed {
 		return nil, false
 	}
 
 	// Pass through
-	return node.HandleRequestVote(args)
+	return handler(node, args)
+}
+
+// CallRequestVote passes a RequestVote RPC through
+func (n *FakeNetwork) CallRequestVote(from, to int, args *raft.RequestVoteArgs) (*raft.RequestVoteReply, bool) {
+	return callRpc(n, from, to, args, (*raft.Raft).HandleRequestVote)
 }
 
 // CallAppendEntries passes an AppendEntries RPC through
 func (n *FakeNetwork) CallAppendEntries(from, to int, args *raft.AppendEntriesArgs) (*raft.AppendEntriesReply, bool) {
-	// TODO: simulate delay
-	
-	// Check availability
-	n.mu.Lock()
-	reachable := n.isReachableLocked(from, to)
-	node, ok := n.nodes[to]
-	n.mu.Unlock()
-	if !reachable || !ok {
-		return nil, false
-	}
-
-	// Pass through
-	return node.HandleAppendEntries(args)
+	return callRpc(n, from, to, args, (*raft.Raft).HandleAppendEntries)
 }
 
-// CallRequestPreVote passes an RequestPreVote RPC through
+// CallRequestPreVote passes a RequestPreVote RPC through
 func (n *FakeNetwork) CallRequestPreVote(from, to int, args *raft.RequestPreVoteArgs) (*raft.RequestPreVoteReply, bool) {
-	// TODO: simulate delay
-	
-	// Check availability
-	n.mu.Lock()
-	reachable := n.isReachableLocked(from, to)
-	node, ok := n.nodes[to]
-	n.mu.Unlock()
-	if !reachable || !ok {
-		return nil, false
-	}
-
-	// Pass through
-	return node.HandleRequestPreVote(args)
+	return callRpc(n, from, to, args, (*raft.Raft).HandleRequestPreVote)
 }
+
+// CallInstallSnapshot passes an InstallSnapshot RPC through
+// func (n *FakeNetwork) CallInstallSnapshot(from, to int, args *raft.InstallSnapshotArgs) (*raft.InstallSnapshotReply, bool) {
+// 	return callRpc(n, from, to, args, (*raft.Raft).HandleInstallSnapshot)
+// }
