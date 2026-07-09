@@ -145,6 +145,32 @@ func NewRaft(id int, peers []int, transport RPCTransport, persister PersistenceP
 	return NewRaftWithoutReadingFromPersistence(id, peers, transport, state.CurrentTerm, state.VotedFor, state.Log, persister)
 }
 
+// logIndexToMemoryIndexLocked converts an index from a log index (stored in LogEntry.Index) to the index in memory (rf.log)
+// Precondition: mutex locked
+func (rf *Raft) logIndexToMemoryIndexLocked(logIndex int) int {
+	return logIndex - rf.log[0].Index
+}
+
+// logIndexToMemoryIndex converts an index from a log index (stored in LogEntry.Index) to the index in memory (rf.log)
+func (rf *Raft) logIndexToMemoryIndex(logIndex int) int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.logIndexToMemoryIndexLocked(logIndex)
+}
+
+// lastLogIndexLocked returns the log index of the last entry in the log
+// Precondition: mutex locked
+func (rf *Raft) lastLogIndexLocked() int {
+	return rf.log[len(rf.log) - 1].Index
+}
+
+// lastLogIndex returns the log index of the last entry in the log
+func (rf *Raft) lastLogIndex() int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.lastLogIndexLocked()
+}
+
 // persistLocked saves the data to the persister
 func (rf *Raft) persistLocked() {
 	rf.persister.Save(PersistentState{
@@ -174,7 +200,7 @@ func (rf *Raft) applyChangesToStateMachineLoop() {
 		var toApply []LogEntry
 		for rf.lastApplied < rf.commitIndex {
 			rf.lastApplied++
-			toApply = append(toApply, rf.log[rf.lastApplied])
+			toApply = append(toApply, rf.log[rf.logIndexToMemoryIndexLocked(rf.lastApplied)])
 		}
 		rf.mu.Unlock()
 
@@ -279,8 +305,8 @@ func (rf *Raft) runElectionTimer() {
 func (rf *Raft) startPreVoteLocked() {
 	rf.preVoteTerm = rf.currentTerm + 1
 	rf.preVotesReceived = 1
-	lastLogIndex := len(rf.log) - 1
-	lastLogTerm := rf.log[lastLogIndex].Term
+	lastLogIndex := rf.lastLogIndexLocked()
+	lastLogTerm := rf.log[rf.logIndexToMemoryIndexLocked(lastLogIndex)].Term
 
 	for _, peerId := range rf.peers {
 		if peerId == rf.me {
@@ -364,10 +390,10 @@ func (rf *Raft) sendRequestVoteAndHandleReply(peerId int) {
 	// Determine the argument values
 	electionTerm := rf.currentTerm
 	me := rf.me
-	lastLogIndex := len(rf.log) - 1
+	lastLogIndex := rf.lastLogIndexLocked()
 	lastLogTerm := 0
 	if lastLogIndex >= 0 {
-		lastLogTerm = rf.log[lastLogIndex].Term
+		lastLogTerm = rf.log[rf.logIndexToMemoryIndexLocked(lastLogIndex)].Term
 	}
 	rf.mu.Unlock()
 
@@ -442,7 +468,9 @@ func (rf *Raft) HandleRequestPreVote(args *RequestPreVoteArgs) (*RequestPreVoteR
 	// Skip older term state update
 
 	// Ensure candidate's log is up to date
-	if ((args.LastLogIndex < len(rf.log) - 1) && args.LastLogTerm == rf.log[len(rf.log) - 1].Term) || args.LastLogTerm < rf.log[len(rf.log) - 1].Term {
+	lastLogIndex := rf.lastLogIndexLocked()
+	lastLogTerm := rf.log[rf.logIndexToMemoryIndexLocked(lastLogIndex)].Term
+	if (args.LastLogIndex < lastLogIndex && args.LastLogTerm == lastLogTerm) || args.LastLogTerm < lastLogTerm {
 		return &RequestPreVoteReply{
 			Term: rf.currentTerm,
 			VoteGranted: false,
@@ -480,7 +508,9 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs) (*RequestVoteReply, boo
 	}
 
 	// Ensure the candidate's log is at least as up to date as ours
-	if ((args.LastLogIndex < len(rf.log) - 1) && args.LastLogTerm == rf.log[len(rf.log) - 1].Term) || args.LastLogTerm < rf.log[len(rf.log) - 1].Term {
+	lastLogIndex := rf.lastLogIndexLocked()
+	lastLogTerm := rf.log[rf.logIndexToMemoryIndexLocked(lastLogIndex)].Term
+	if (args.LastLogIndex < lastLogIndex && args.LastLogTerm == lastLogTerm) || args.LastLogTerm < lastLogTerm {
 		return &RequestVoteReply{
 			Term: rf.currentTerm,
 			VoteGranted: false,
@@ -547,12 +577,12 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs) (*AppendEntriesRepl
 		}, true
 	}
 	// Index exists, but term does not match
-	if args.PrevLogIndex >= 0 && rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+	if args.PrevLogIndex >= 0 && rf.log[rf.logIndexToMemoryIndexLocked(args.PrevLogIndex)].Term != args.PrevLogTerm {
 		// Conflict term is the term of this log's value at the index the leader thinks we match
-		conflictTerm := rf.log[args.PrevLogIndex].Term
+		conflictTerm := rf.log[rf.logIndexToMemoryIndexLocked(args.PrevLogIndex)].Term
 		// Must crawl back conflict index to find the first index in the conflict term
 		conflictIndex := args.PrevLogIndex
-		for conflictIndex > 0 && rf.log[conflictIndex - 1].Term == conflictTerm {
+		for conflictIndex > 0 && rf.log[rf.logIndexToMemoryIndexLocked(conflictIndex - 1)].Term == conflictTerm {
 			conflictIndex--
 		}
 
@@ -572,8 +602,8 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs) (*AppendEntriesRepl
 			break
 		}
 
-		if rf.log[logIndex].Term != args.Entries[entryIndex].Term {
-			rf.log = rf.log[:logIndex]
+		if rf.log[rf.logIndexToMemoryIndexLocked(logIndex)].Term != args.Entries[entryIndex].Term {
+			rf.log = rf.log[:rf.logIndexToMemoryIndexLocked(logIndex)]
 			rf.log = append(rf.log, args.Entries[entryIndex:]...)
 			break
 		}
@@ -657,11 +687,11 @@ func (rf *Raft) subscribeHeartbeats(peerId int) {
 	}
 }
 
-// findLastIndexOfTerm finds the last absolute log index containing a value in the given term
+// findLastIndexOfTerm finds the last log index containing a value in the given term
 func (rf *Raft) findLastIndexOfTerm(term int) int {
 	for i := len(rf.log) - 1; i >= 0; i-- {
 		if rf.log[i].Term == term {
-			return i
+			return rf.log[i].Index
 		}
 	}
 	return -1
@@ -672,12 +702,13 @@ func (rf *Raft) findLastIndexOfTerm(term int) int {
 func (rf *Raft) advanceCommitIndexLocked() {
 	// Search from the end of the log
 	for i := len(rf.log) - 1; i >= rf.commitIndex; i-- {
+		// Ensure we are processing log data in the correct term
 		if rf.log[i].Term != rf.currentTerm {
 			continue
 		}
 
+		// Count how many peers agree with our log
 		count := 1
-
 		for _, peer := range rf.peers {
 			if peer == rf.me {
 				continue
@@ -688,6 +719,7 @@ func (rf *Raft) advanceCommitIndexLocked() {
 			}
 		}
 
+		// If enough agree, we have committed the log
 		if count > len(rf.peers) / 2 {
 			rf.commitIndex = i
 			rf.applyCond.Broadcast() // pass the newly committed commands to the channel
@@ -706,13 +738,13 @@ func (rf *Raft) sendAppendEntryAndHandleResponse(peerId int) {
 	}
 
 	// Get the log entries that need to be sent
-	logsToSend := append([]LogEntry(nil), rf.log[rf.nextIndex[peerId]:]...) // make copy
+	logsToSend := append([]LogEntry(nil), rf.log[rf.logIndexToMemoryIndexLocked(rf.nextIndex[peerId]):]...) // make copy
 	// Deep copy byte arrays to ensure each node gets a fresh copy of each LogEntry
 	for i := range logsToSend {
 		logsToSend[i].Command = append([]byte(nil), logsToSend[i].Command...)
 	}
 	prevLogIndex := rf.nextIndex[peerId] - 1
-	prevLogTerm := rf.log[prevLogIndex].Term
+	prevLogTerm := rf.log[rf.logIndexToMemoryIndexLocked(prevLogIndex)].Term
 
 	// Get other args for the message
 	commitIndex := rf.commitIndex
