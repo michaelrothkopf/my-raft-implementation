@@ -614,7 +614,7 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs) (*AppendEntriesRepl
 		conflictTerm := rf.log[rf.logIndexToMemoryIndexLocked(args.PrevLogIndex)].Term
 		// Must crawl back conflict index to find the first index in the conflict term
 		conflictIndex := args.PrevLogIndex
-		for conflictIndex > 0 && rf.log[rf.logIndexToMemoryIndexLocked(conflictIndex - 1)].Term == conflictTerm {
+		for conflictIndex > rf.log[0].Index && rf.log[rf.logIndexToMemoryIndexLocked(conflictIndex - 1)].Term == conflictTerm {
 			conflictIndex--
 		}
 
