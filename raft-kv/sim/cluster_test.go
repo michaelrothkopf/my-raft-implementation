@@ -191,8 +191,8 @@ func TestBasicAgreement(t *testing.T) {
 		for i := range commands {
 			select {
 			case message := <-tc.nodes[id].GetApplyChannel():
-				if !bytes.Equal(message.Command, commands[i]) {
-					t.Fatalf("expected message \"%s\" at index %d but got \"%s\" instead", commands[i], i, message.Command)
+				if !bytes.Equal(message.Data, commands[i]) {
+					t.Fatalf("expected message \"%s\" at index %d but got \"%s\" instead", commands[i], i, message.Data)
 				}
 			// Timeout case
 			case <-time.After(1 * time.Second):
@@ -254,8 +254,8 @@ func TestFollowerPropagationPostPartition(t *testing.T) {
 	for i := range commands {
 		select {
 		case message := <-tc.nodes[2].GetApplyChannel():
-			if !bytes.Equal(message.Command, commands[i]) {
-				t.Fatalf("previously separated node did not have expected command %s at index %d, had %s instead", commands[i], i, message.Command)
+			if !bytes.Equal(message.Data, commands[i]) {
+				t.Fatalf("previously separated node did not have expected command %s at index %d, had %s instead", commands[i], i, message.Data)
 			}
 		// Timeout case
 		case <-time.After(1 * time.Second):
@@ -310,8 +310,8 @@ func TestFollowerPropagationPostRevive(t *testing.T) {
 	for i := range commands {
 		select {
 		case message := <-tc.nodes[2].GetApplyChannel():
-			if !bytes.Equal(message.Command, commands[i]) {
-				t.Fatalf("previously dead node did not have expected command %s at index %d, had %s instead", commands[i], i, message.Command)
+			if !bytes.Equal(message.Data, commands[i]) {
+				t.Fatalf("previously dead node did not have expected command %s at index %d, had %s instead", commands[i], i, message.Data)
 			}
 		// Timeout case
 		case <-time.After(1 * time.Second):

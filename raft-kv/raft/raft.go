@@ -54,7 +54,7 @@ type Raft struct {
 	preVoteTerm			int
 
 	// Channel to apply committed commands to the state machine
-	applyCh				chan ApplyMsg
+	applyCh				chan ApplyMessage
 	// Cond to listen for changes to the state machine
 	applyCond			*sync.Cond
 	
@@ -122,7 +122,7 @@ func NewRaftWithoutReadingFromPersistence(id int, peers []int, transport RPCTran
 		killed: false,
 	}
 
-	raft.applyCh = make(chan ApplyMsg)
+	raft.applyCh = make(chan ApplyMessage)
 	raft.applyCond = sync.NewCond(&raft.mu)
 
 	raft.resetElectionTimer()
@@ -171,13 +171,18 @@ func (rf *Raft) lastLogIndex() int {
 	return rf.lastLogIndexLocked()
 }
 
-// persistLocked saves the data to the persister
+// persistLocked saves the persistent state variables to the persister
 func (rf *Raft) persistLocked() {
 	rf.persister.Save(PersistentState{
 		CurrentTerm: rf.currentTerm,
 		VotedFor: rf.votedFor,
 		Log: rf.log,
 	})
+}
+
+// persistSnapshotLocked saves snapshot data to the persister
+func (rf *Raft) persistSnapshotLocked(snapshotData []byte) {
+	rf.persister.SaveSnapshot(snapshotData)
 }
 
 func (rf *Raft) applyChangesToStateMachineLoop() {
@@ -206,10 +211,10 @@ func (rf *Raft) applyChangesToStateMachineLoop() {
 
 		// Send them through the channel under unlocked mutex
 		for _, entry := range toApply {
-			rf.applyCh <- ApplyMsg{
-				CommandValid: true,
-				Command: entry.Command,
-				CommandIndex: entry.Index,
+			rf.applyCh <- ApplyMessage{
+				Type: ApplyMessageCommand,
+				Data: entry.Command,
+				Index: entry.Index,
 			}
 		}
 	}
@@ -242,6 +247,33 @@ func (rf *Raft) Start(command []byte) (int, int, bool) {
 	rf.persistLocked()
 
 	return index, rf.currentTerm, true
+}
+
+// Snapshot logs a snapshot in rf.log after it has been created; it deletes the unnecessary LogEntry objects
+func (rf *Raft) Snapshot(index int, snapshotData []byte) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// If the snapshot compacts nothing, do nothing
+	if index <= rf.log[0].Index {
+		return
+	}
+
+	// Can't snapshot future commands
+	if index > rf.lastLogIndexLocked() {
+		panic("Raft.Snapshot called with out-of-bounds log index")
+	}
+
+	// Discard the log
+	sliceStart := rf.logIndexToMemoryIndexLocked(index)
+	newSentinel := LogEntry{ Term: rf.log[sliceStart].Term, Index: index }
+	newLog := make([]LogEntry, 0, len(rf.log) - sliceStart) // want empty slice (will be appended) but with enough capacity to be appended
+	newLog = append(newLog, newSentinel)
+	newLog = append(newLog, rf.log[sliceStart+1:]...)
+	rf.log = newLog
+
+	// Save the snapshot to persistent storage
+	rf.persistSnapshotLocked(snapshotData)
 }
 
 // resetElectionTimer resets the election timer to a new random value
@@ -627,6 +659,60 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs) (*AppendEntriesRepl
 	}, true
 }
 
+// HandleInstallSnapshot (RPC recipient) handles an install snapshot RPC from another node
+func (rf *Raft) HandleInstallSnapshot(args *InstallSnapshotArgs) (*InstallSnapshotReply, bool) {
+	rf.mu.Lock()
+
+	// Cannot accept snapshot if dead
+	if rf.killed {
+		rf.mu.Unlock()
+		return nil, false
+	}
+
+	// If the snapshot is too old, we reject and return our term
+	if args.Term < rf.currentTerm {
+		currentTerm := rf.currentTerm
+		rf.mu.Unlock()
+		return &InstallSnapshotReply{Term: currentTerm}, true
+	}
+
+	// If the snapshot is newer than us, update our term
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.votedFor = -1
+	}
+	rf.state = Follower
+	rf.resetElectionTimerLocked()
+	rf.persistLocked()
+
+	// Ignore useless snapshot
+	if args.LastIncludedIndex <= rf.log[0].Index {
+		rf.mu.Unlock()
+		return &InstallSnapshotReply{Term: rf.currentTerm}, true
+	}
+
+	// Discard the log and replace it with the snapshot
+	newSentinel := LogEntry{ Term: args.LastIncludedTerm, Index: args.LastIncludedIndex }
+	rf.log = []LogEntry{newSentinel}
+	rf.commitIndex = args.LastIncludedIndex
+	rf.lastApplied = args.LastIncludedIndex
+
+	rf.persistSnapshotLocked(args.Data)
+	rf.persistLocked()
+
+	rf.mu.Unlock()
+
+	// Apply the snapshot to the state machine
+	rf.applyCh <- ApplyMessage{
+		Type: ApplyMessageSnapshot,
+		Data: args.Data,
+		Index: args.LastIncludedIndex,
+		Term: args.LastIncludedTerm,
+	}
+
+	return &InstallSnapshotReply{Term: rf.currentTerm}, true
+}
+
 // becomeLeader launches goroutines to send heartbeat signals and check replies
 // Precondition: mutex locked
 func (rf *Raft) becomeLeaderLocked() {
@@ -734,6 +820,60 @@ func (rf *Raft) sendAppendEntryAndHandleResponse(peerId int) {
 	// Ensure we are leader and not dead (stale send prevention)
 	if rf.state != Leader || rf.killed {
 		rf.mu.Unlock()
+		return
+	}
+
+	// If we need to send a snapshot, do so instead of sending a typical heartbeat (will catch up on next heartbeat)
+	// Snapshot necessary if we deleted log entries that the follower is missing
+	if rf.nextIndex[peerId] <= rf.log[0].Index {
+		// Make snapshot parameters
+		lastIncludedIndex := rf.log[0].Index
+		lastIncludedTerm := rf.log[0].Term
+		term := rf.currentTerm
+		leaderId := rf.me
+		rf.mu.Unlock()
+
+		// Send the snapshot over
+		snapshotData, err := rf.persister.LoadSnapshot()
+		if err != nil {
+			panic("snapshot does not exist but should, unable to continue as chain of state is irreversably broken on authoritative leader")
+		}
+
+		reply, success := rf.transport.CallInstallSnapshot(peerId, &InstallSnapshotArgs{
+			Term: term,
+			LeaderId: leaderId,
+			LastIncludedIndex: lastIncludedIndex,
+			LastIncludedTerm: lastIncludedTerm,
+			Data: snapshotData,
+		})
+
+		// Ignore dead node
+		if !success {
+			return
+		}
+
+		// Process the reply and update the follower's status in our state
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		// In scenarios where we no longer are concerned with the response, don't be
+		if rf.killed || rf.state != Leader || rf.currentTerm != term {
+			return
+		}
+
+		// If we are outdated, step down immediately
+		if reply.Term > rf.currentTerm {
+			rf.currentTerm = reply.Term
+			rf.state = Follower
+			rf.votedFor = -1
+			rf.persistLocked()
+			rf.resetElectionTimerLocked()
+			return
+		}
+
+		// Otherwise, the follower is up to date to the snapshot now
+		rf.matchIndex[peerId] = lastIncludedIndex
+		rf.nextIndex[peerId] = lastIncludedIndex + 1
+
 		return
 	}
 
@@ -862,6 +1002,6 @@ func (rf *Raft) GetCurrentTerm() int {
 }
 
 // GetApplyChannel gets the output channel for applied commands
-func (rf *Raft) GetApplyChannel() (chan ApplyMsg) {
+func (rf *Raft) GetApplyChannel() (chan ApplyMessage) {
 	return rf.applyCh
 }

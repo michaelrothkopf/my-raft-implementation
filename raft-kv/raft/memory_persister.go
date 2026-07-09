@@ -7,8 +7,9 @@ import (
 // MemoryPersister implements PersistenceProvider
 // Provides a store for simple memory holding of the persistent fields
 type MemoryPersister struct {
-	mu		sync.Mutex
-	state	PersistentState
+	mu			sync.Mutex
+	state		PersistentState
+	snapshot	[]byte
 }
 
 // NewMemoryPersister constructs a MemoryPersister
@@ -60,4 +61,27 @@ func (mp *MemoryPersister) Load() (PersistentState, error) {
 	}
 
 	return state, nil
+}
+
+func (mp *MemoryPersister) SaveSnapshot(data []byte) error {
+	mp.mu.Lock()
+	defer mp.mu.Unlock()
+
+	// Data should not be empty
+	if len(data) == 0 {
+		panic("attempted to save snapshot using MemoryPersister.SaveSnapshot with empty data")
+	}
+
+	// Deep copy the snapshot to state
+	mp.snapshot = append([]byte(nil), data...)
+
+	return nil
+}
+
+func (mp *MemoryPersister) LoadSnapshot() ([]byte, error) {
+	mp.mu.Lock()
+	defer mp.mu.Unlock()
+
+	// Return a deep copy of the data
+	return append([]byte(nil), mp.snapshot...), nil
 }

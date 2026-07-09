@@ -104,6 +104,6 @@ func (n *FakeNetwork) CallRequestPreVote(from, to int, args *raft.RequestPreVote
 }
 
 // CallInstallSnapshot passes an InstallSnapshot RPC through
-// func (n *FakeNetwork) CallInstallSnapshot(from, to int, args *raft.InstallSnapshotArgs) (*raft.InstallSnapshotReply, bool) {
-// 	return callRpc(n, from, to, args, (*raft.Raft).HandleInstallSnapshot)
-// }
+func (n *FakeNetwork) CallInstallSnapshot(from, to int, args *raft.InstallSnapshotArgs) (*raft.InstallSnapshotReply, bool) {
+	return callRpc(n, from, to, args, (*raft.Raft).HandleInstallSnapshot)
+}

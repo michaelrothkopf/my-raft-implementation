@@ -29,3 +29,7 @@ func (nt *FakeNetworkTransport) CallAppendEntries(peerId int, args *raft.AppendE
 func (nt *FakeNetworkTransport) CallRequestPreVote(peerId int, args *raft.RequestPreVoteArgs) (*raft.RequestPreVoteReply, bool) {
 	return nt.network.CallRequestPreVote(nt.me, peerId, args)
 }
+
+func (nt *FakeNetworkTransport) CallInstallSnapshot(peerId int, args *raft.InstallSnapshotArgs) (*raft.InstallSnapshotReply, bool) {
+	return nt.network.CallInstallSnapshot(nt.me, peerId, args)
+}

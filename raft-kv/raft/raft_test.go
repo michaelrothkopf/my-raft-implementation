@@ -19,6 +19,10 @@ func (t* dummyTransport) CallRequestPreVote(peerId int, args *RequestPreVoteArgs
 	return nil, false
 }
 
+func (t* dummyTransport) CallInstallSnapshot(peerId int, args *InstallSnapshotArgs) (*InstallSnapshotReply, bool) {
+	return nil, false
+}
+
 // TestGetRandomElectionTimeout tests getRandomElectionTimeout to ensure values are always between the expected value
 func TestGetRandomElectionTimeout(t *testing.T) {
 	timeout := getRandomElectionTimeout()
