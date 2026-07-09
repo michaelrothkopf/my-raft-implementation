@@ -27,7 +27,7 @@ func newTestCluster(n int) *testCluster {
 	nodes := make(map[int]*raft.Raft)
 	for _, id := range ids {
 		transport := NewFakeNetworkTransport(network, id)
-		node := raft.NewRaftWithoutPersistence(id, ids, transport, 0, -1, nil)
+		node := raft.NewRaftWithoutReadingFromPersistence(id, ids, transport, 0, -1, nil, raft.NewMemoryPersister())
 		nodes[id] = node
 		network.RegisterNode(id, node)
 	}
@@ -317,5 +317,36 @@ func TestFollowerPropagationPostRevive(t *testing.T) {
 		case <-time.After(1 * time.Second):
 			t.Errorf("previously dead node did not receive any commands (error occurred on index %d)", i)
 		}
+	}
+}
+
+func TestPersistenceTransferWithFreshNode(t *testing.T) {
+	persister := raft.NewMemoryPersister()
+	network := NewFakeNetwork()
+	ids := []int{0, 1, 2}
+	
+	transport := NewFakeNetworkTransport(network, 0)
+	node := raft.NewRaft(0, ids, transport, persister)
+	network.RegisterNode(0, node)
+
+	// Cast a vote to persist some state
+	node.HandleRequestVote(&raft.RequestVoteArgs{
+		Term: 5, CandidateId: 1, LastLogIndex: 0, LastLogTerm: 0,
+	})
+
+	// Create a new node with the same persistence
+	newNode := raft.NewRaft(0, ids, transport, persister)
+
+	// Ensure the persistent state transferred
+	// Term matches
+	if newNode.GetCurrentTerm() != 5 {
+		t.Fatalf("new node did not receive persistent data")
+	}
+	// Will not vote again
+	reply, _ := newNode.HandleRequestVote(&raft.RequestVoteArgs{
+		Term: 5, CandidateId: 2, LastLogIndex: 0, LastLogTerm: 0,
+	})
+	if reply.VoteGranted {
+		t.Fatalf("new node voted without sentinel votedFor")
 	}
 }

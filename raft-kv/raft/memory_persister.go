@@ -1,38 +1,36 @@
-package sim
+package raft
 
 import (
 	"sync"
-
-	"github.com/michaelrothkopf/my-raft-implementation/raft-kv/raft"
 )
 
-// MemoryPersister implements raft.PersistenceProvider
+// MemoryPersister implements PersistenceProvider
 // Provides a store for simple memory holding of the persistent fields
 type MemoryPersister struct {
 	mu		sync.Mutex
-	state	raft.PersistentState
+	state	PersistentState
 }
 
 // NewMemoryPersister constructs a MemoryPersister
 func NewMemoryPersister() *MemoryPersister {
-	return &MemoryPersister{state: raft.PersistentState{CurrentTerm:0,VotedFor:-1,Log:nil}}
+	return &MemoryPersister{state: PersistentState{CurrentTerm:0,VotedFor:-1,Log:nil}}
 }
 
 // Save saves new persistent state to the memory persister
-func (mp *MemoryPersister) Save(state raft.PersistentState) error {
+func (mp *MemoryPersister) Save(state PersistentState) error {
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
 
 	// Deep copy the log and its entries
-	logCopy := make([]raft.LogEntry, len(state.Log))
+	logCopy := make([]LogEntry, len(state.Log))
 	for i, logEntry := range state.Log {
-		logCopy[i] = raft.LogEntry{
+		logCopy[i] = LogEntry{
 			Term: logEntry.Term,
 			Index: logEntry.Index,
 			Command: append([]byte(nil), logEntry.Command...),
 		}
 	}
-	mp.state = raft.PersistentState{
+	mp.state = PersistentState{
 		CurrentTerm: state.CurrentTerm,
 		VotedFor: state.VotedFor,
 		Log: logCopy,
@@ -42,20 +40,20 @@ func (mp *MemoryPersister) Save(state raft.PersistentState) error {
 }
 
 // Load loads the persistent state from the memory persister
-func (mp *MemoryPersister) Load() (raft.PersistentState, error) {
+func (mp *MemoryPersister) Load() (PersistentState, error) {
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
 
 	// Deep copy the log and its entries
-	logCopy := make([]raft.LogEntry, len(mp.state.Log))
+	logCopy := make([]LogEntry, len(mp.state.Log))
 	for i, logEntry := range mp.state.Log {
-		logCopy[i] = raft.LogEntry{
+		logCopy[i] = LogEntry{
 			Term: logEntry.Term,
 			Index: logEntry.Index,
 			Command: append([]byte(nil), logEntry.Command...),
 		}
 	}
-	state := raft.PersistentState{
+	state := PersistentState{
 		CurrentTerm: mp.state.CurrentTerm,
 		VotedFor: mp.state.VotedFor,
 		Log: logCopy,

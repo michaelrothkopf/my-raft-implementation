@@ -63,8 +63,15 @@ type Raft struct {
 	generation			int // utility; not strictly necessary in real implementation, but for fake network, allows Raft to keep track of if it has been restarted, protecting electionTimer from race conditions
 }
 
-// NewRaftWithoutPersistence creates a new node
-func NewRaftWithoutPersistence(id int, peers []int, transport RPCTransport, currentTerm int, votedFor int, log []LogEntry) *Raft {
+// NewRaftWithoutReadingFromPersistence creates a new node
+func NewRaftWithoutReadingFromPersistence(id int, peers []int, transport RPCTransport, currentTerm int, votedFor int, log []LogEntry, persister PersistenceProvider) *Raft {
+	// Ensure non-nil transport and persister
+	if transport == nil {
+		panic("transport may not be nil when initializing a new Raft")
+	}
+	if persister == nil {
+		panic("persister may not be nil when initializing a new Raft")
+	}
 	// Deep copy all slices
 	peersCopy := make([]int, len(peers))
 	copy(peersCopy, peers)
@@ -97,6 +104,7 @@ func NewRaftWithoutPersistence(id int, peers []int, transport RPCTransport, curr
 		peers: peersCopy,
 		transport: transport,
 
+		persister: persister,
 		currentTerm: currentTerm,
 		votedFor: votedFor,
 		log: logCopy,
@@ -134,7 +142,7 @@ func NewRaft(id int, peers []int, transport RPCTransport, persister PersistenceP
 	}
 
 	// Call the parameterized constructor
-	return NewRaftWithoutPersistence(id, peers, transport, state.CurrentTerm, state.VotedFor, state.Log)
+	return NewRaftWithoutReadingFromPersistence(id, peers, transport, state.CurrentTerm, state.VotedFor, state.Log, persister)
 }
 
 // persistLocked saves the data to the persister
