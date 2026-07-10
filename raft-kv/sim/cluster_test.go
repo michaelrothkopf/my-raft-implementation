@@ -12,14 +12,14 @@ import (
 
 // testCluster is a simple cluster of nodes in the network
 type testCluster struct {
-	network		*FakeNetwork
+	network		*FakeRaftNetwork
 	nodes		map[int]*raft.Raft
 	ids			[]int
 }
 
 // newTestCluster constructs a fresh TestCluster for a test
 func newTestCluster(n int) *testCluster {
-	network := NewFakeNetwork()
+	network := NewFakeRaftNetwork()
 	ids := make([]int, n)
 	for i := 0; i < n; i++ {
 		ids[i] = i
@@ -27,7 +27,7 @@ func newTestCluster(n int) *testCluster {
 
 	nodes := make(map[int]*raft.Raft)
 	for _, id := range ids {
-		transport := NewFakeNetworkTransport(network, id)
+		transport := NewFakeRaftNetworkTransport(network, id)
 		node := raft.NewRaftWithoutReadingFromPersistence(id, ids, transport, 0, -1, nil, raft.NewMemoryPersister())
 		nodes[id] = node
 		network.RegisterNode(id, node)
@@ -323,10 +323,10 @@ func TestFollowerPropagationPostRevive(t *testing.T) {
 
 func TestPersistenceTransferWithFreshNode(t *testing.T) {
 	persister := raft.NewMemoryPersister()
-	network := NewFakeNetwork()
+	network := NewFakeRaftNetwork()
 	ids := []int{0, 1, 2}
 	
-	transport := NewFakeNetworkTransport(network, 0)
+	transport := NewFakeRaftNetworkTransport(network, 0)
 	node := raft.NewRaft(0, ids, transport, persister)
 	network.RegisterNode(0, node)
 
@@ -354,10 +354,10 @@ func TestPersistenceTransferWithFreshNode(t *testing.T) {
 
 func TestSnapshotCapture(t *testing.T) {
 	persister := raft.NewMemoryPersister()
-	network := NewFakeNetwork()
+	network := NewFakeRaftNetwork()
 	ids := []int{0}
 	
-	transport := NewFakeNetworkTransport(network, 0)
+	transport := NewFakeRaftNetworkTransport(network, 0)
 	node := raft.NewRaft(0, ids, transport, persister)
 	network.RegisterNode(0, node)
 
@@ -406,7 +406,7 @@ func TestSnapshotPropagationPostPartition(t *testing.T) {
 	// Substitute a node to extract its persister data
 	tc.network.nodes[2].Kill()
 	persister := raft.NewMemoryPersister()
-	tc.nodes[2] = raft.NewRaftWithoutReadingFromPersistence(2, tc.ids, NewFakeNetworkTransport(tc.network, 2), 0, -1, nil, persister)
+	tc.nodes[2] = raft.NewRaftWithoutReadingFromPersistence(2, tc.ids, NewFakeRaftNetworkTransport(tc.network, 2), 0, -1, nil, persister)
 	tc.network.nodes[2] = tc.nodes[2]
 
 	// Allow it to select a leader
@@ -476,7 +476,7 @@ func TestSnapshotPropagationPostRevive(t *testing.T) {
 	// Substitute a node to extract its persister data
 	tc.network.nodes[2].Kill()
 	persister := raft.NewMemoryPersister()
-	tc.nodes[2] = raft.NewRaftWithoutReadingFromPersistence(2, tc.ids, NewFakeNetworkTransport(tc.network, 2), 0, -1, nil, persister)
+	tc.nodes[2] = raft.NewRaftWithoutReadingFromPersistence(2, tc.ids, NewFakeRaftNetworkTransport(tc.network, 2), 0, -1, nil, persister)
 	tc.network.nodes[2] = tc.nodes[2]
 
 	// Allow it to select a leader
