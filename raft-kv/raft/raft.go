@@ -1044,3 +1044,7 @@ func (rf *Raft) GetCurrentTerm() int {
 func (rf *Raft) GetApplyChannel() (chan ApplyMessage) {
 	return rf.applyCh
 }
+
+func (rf *Raft) GetLogSizeSinceSnapshot() int {
+	return len(rf.log) - 1
+}
