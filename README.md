@@ -8,6 +8,10 @@ This implementation uses Go. I'm trying to avoid third-party libraries outside o
 
 Separate files contain documentation regarding [architecture](docs/architecture.md) and [testing](docs/testing.md).
 
+## Execution
+
+No command line interface is provided, since this program is meant exclusively for testing purposes. Instead, simply download the code and run `go test ./... -race -count=N`, where `N` is the number of passes you want to run. (One pass takes approximately 30 seconds.)
+
 ## Development
 
 I decided to make this project to learn more about consensus and distributed networks as I research distributed LLMs and hosting with the First State AI Institute at the University of Delaware.
