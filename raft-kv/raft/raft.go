@@ -257,6 +257,12 @@ func (rf *Raft) Start(command []byte) (int, int, bool) {
 	rf.log = append(rf.log, entry)
 	rf.persistLocked()
 
+	// Edge case: we have one node
+	// If we have one node, we can commit immediately
+	if len(rf.peers) == 1 {
+		rf.advanceCommitIndexLocked()
+	}
+
 	return index, rf.currentTerm, true
 }
 
@@ -836,7 +842,8 @@ func (rf *Raft) advanceCommitIndexLocked() {
 		}
 
 		// If enough agree, we have committed the log
-		if count > len(rf.peers) / 2 {
+		// always commit if only one node
+		if count > len(rf.peers) / 2 || len(rf.peers) == 1 {
 			rf.commitIndex = i
 			rf.applyCond.Broadcast() // pass the newly committed commands to the channel
 			return

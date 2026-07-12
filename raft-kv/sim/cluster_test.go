@@ -495,3 +495,40 @@ func TestSnapshotPropagationPostRevive(t *testing.T) {
 		t.Fatalf("snapshot data was not the data that was passed in (actual: %v)", actualSnapshotData)
 	}
 }
+
+func TestSingleNodeCluster(t *testing.T) {
+	tc := NewTestCluster(1)
+
+	// Let it select iself as leader
+	time.Sleep(1 * time.Second)
+
+	leaders := tc.leaders()
+	if len(leaders) != 1 {
+		t.Fatalf("node did not select iself as leader")
+	}
+
+	// Attempt to send a command
+	index, term, isLeader := tc.nodes[0].Start([]byte("Brown Eyed Girl"))
+	if !isLeader {
+		t.Fatalf("node was not leader")
+	}
+	if index != 1 {
+		t.Fatalf("command submitted with index %d, but wanted 1", index)
+	}
+	if term != 0 {
+		t.Fatalf("got term %d but expected 0", term)
+	}
+
+	// Let it propagate
+	time.Sleep(500 * time.Millisecond)
+
+	// Drain the apply channel to ensure it was committed
+	select {
+	case message := <-tc.nodes[0].GetApplyChannel():
+		if !bytes.Equal(message.Data, []byte("Brown Eyed Girl")) {
+			t.Fatalf("data did not match; got \"%s\", expected \"%s\"", message.Data, "Brown Eyed Girl")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatalf("timed out; command did not commit")
+	}
+}
