@@ -7,6 +7,15 @@ type Client struct {
 	lastRequestId	int
 }
 
+func NewClient(clientId int, transport RPCTransport) *Client {
+	return &Client{
+		transport: transport,
+		leaderHint: 0,
+		clientId: clientId,
+		lastRequestId: 0,
+	}
+}
+
 func callRpc[Args any, Reply RpcReply](cl *Client, args *Args, handler func (int, *Args) (Reply, bool)) Reply {
 	for {
 		reply, dead := handler(cl.leaderHint, args)
