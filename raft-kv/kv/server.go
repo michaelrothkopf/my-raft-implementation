@@ -153,6 +153,9 @@ func (kv *KeyValueServer) applyCommandLoop() {
 		}
 
 		kv.mu.Unlock()
+
+		// Make a snapshot, if necessary
+		kv.makeSnapshot(applyMessage.Index)
 	}
 }
 
