@@ -22,7 +22,7 @@ type KeyValueServer struct {
 	lastAppliedRequest		map[int]int
 
 	// Channels for notifying clients when their command is applied
-	notifyChannels		map[int](chan Command)
+	notifyChannels			map[int](chan Command)
 
 	killed bool
 }
