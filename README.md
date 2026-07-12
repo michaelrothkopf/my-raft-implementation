@@ -4,17 +4,9 @@ A simple implementation of the Raft protocol for consensus among distributed ser
 
 This implementation uses Go. I'm trying to avoid third-party libraries outside of the standard library.
 
-## Structure
+## Architecture and Testing
 
-- 📂 `raft-kv/` Primary project code folder
-    - 📂 `raft/` Raft implementation and tests (independent of newtorking protocol)
-        - 📄 `raft.go` Implementations for the Raft logic
-        - 📄 `rpc.go` Interfaces for RPC transport layer to implement
-        - 📄 `raft_test.go` Testing for the core Raft logic
-    - 📂 `sim/` Simulated network for early testing
-        - 📄 `network.go` A simple fake network handler to manage node communication
-        - 📄 `transport.go` A fake network compatible RPC implementation to interface with Raft
-        - 📄 `cluster_test.go` Testing for the simulated network
+Separate files contain documentation regarding [architecture](docs/architecture.md) and [testing](docs/testing.md).
 
 ## Development
 
