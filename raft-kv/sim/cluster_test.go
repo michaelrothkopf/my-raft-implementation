@@ -10,15 +10,15 @@ import (
 	"github.com/michaelrothkopf/my-raft-implementation/raft-kv/raft"
 )
 
-// testCluster is a simple cluster of nodes in the network
-type testCluster struct {
+// TestCluster is a simple cluster of nodes in the network
+type TestCluster struct {
 	network		*FakeRaftNetwork
 	nodes		map[int]*raft.Raft
 	ids			[]int
 }
 
-// newTestCluster constructs a fresh TestCluster for a test
-func newTestCluster(n int) *testCluster {
+// NewTestCluster constructs a fresh TestCluster for a test
+func NewTestCluster(n int) *TestCluster {
 	network := NewFakeRaftNetwork()
 	ids := make([]int, n)
 	for i := 0; i < n; i++ {
@@ -33,7 +33,7 @@ func newTestCluster(n int) *testCluster {
 		network.RegisterNode(id, node)
 	}
 
-	return &testCluster{
+	return &TestCluster{
 		network: network,
 		nodes: nodes,
 		ids: ids,
@@ -41,7 +41,7 @@ func newTestCluster(n int) *testCluster {
 }
 
 // leaders returns the ids of all of the nodes who currently believe that they are the leader
-func (tc *testCluster) leaders() []int {
+func (tc *TestCluster) leaders() []int {
 	var result []int
 	for id, node := range tc.nodes {
 		if node.GetState() == raft.Leader {
@@ -53,7 +53,7 @@ func (tc *testCluster) leaders() []int {
 
 // TestInitialElection tests the election on a fresh cluster
 func TestInitialElection(t *testing.T) {
-	tc := newTestCluster(3)
+	tc := NewTestCluster(3)
 
 	// Allow the cluster to elect a new leader
 	time.Sleep(1 * time.Second)
@@ -74,7 +74,7 @@ func TestInitialElection(t *testing.T) {
 
 // TestReelection tests the election after the leader has been killed
 func TestReelection(t *testing.T) {
-	tc := newTestCluster(4)
+	tc := NewTestCluster(4)
 
 	// Allow the cluster to elect a leader
 	time.Sleep(1 * time.Second)
@@ -103,7 +103,7 @@ func TestReelection(t *testing.T) {
 
 // TestPartitionReelection tests that the majority partition successfully reelects a leader but the minority doesn't
 func TestPartitionReelection(t *testing.T) {
-	tc := newTestCluster(5)
+	tc := NewTestCluster(5)
 
 	// Allow the cluster to elect a leader
 	time.Sleep(1 * time.Second)
@@ -147,7 +147,7 @@ func TestPartitionReelection(t *testing.T) {
 
 // TestBasicLogReplication tests that a cluster of nodes under ideal conditions replicates the messages exactly and in the correct order
 func TestBasicLogReplication(t *testing.T) {
-	tc := newTestCluster(5)
+	tc := NewTestCluster(5)
 
 	// Allow leader selection
 	time.Sleep(1 * time.Second)
@@ -205,7 +205,7 @@ func TestBasicLogReplication(t *testing.T) {
 
 // TestFollowerPropagationPostPartition tests that a previously partitioned node successfully receives messages that were sent while it slept
 func TestFollowerPropagationPostPartition(t *testing.T) {
-	tc := newTestCluster(3)
+	tc := NewTestCluster(3)
 
 	// Allow it to select a leader
 	time.Sleep(1 * time.Second)
@@ -266,7 +266,7 @@ func TestFollowerPropagationPostPartition(t *testing.T) {
 }
 
 func TestFollowerPropagationPostRevive(t *testing.T) {
-	tc := newTestCluster(3)
+	tc := NewTestCluster(3)
 
 	// Allow it to select a leader
 	time.Sleep(1 * time.Second)
@@ -401,7 +401,7 @@ func TestSnapshotCapture(t *testing.T) {
 }
 
 func TestSnapshotPropagationPostPartition(t *testing.T) {
-	tc := newTestCluster(3)
+	tc := NewTestCluster(3)
 
 	// Substitute a node to extract its persister data
 	tc.network.nodes[2].Kill()
@@ -471,7 +471,7 @@ func TestSnapshotPropagationPostPartition(t *testing.T) {
 }
 
 func TestSnapshotPropagationPostRevive(t *testing.T) {
-	tc := newTestCluster(3)
+	tc := NewTestCluster(3)
 
 	// Substitute a node to extract its persister data
 	tc.network.nodes[2].Kill()
