@@ -152,3 +152,33 @@ func TestKeyValueRepeatRefusal(t *testing.T) {
 		t.Fatalf("expected \"original\" to be the value of test key, got \"%v\"", getReply.Value)
 	}
 }
+
+func TestKeyValueDelete(t *testing.T) {
+	cl := NewKeyValueTestClient(5)
+	
+	time.Sleep(500 * time.Millisecond)
+
+	cl.Set("dog", "cat")
+
+	time.Sleep(500 * time.Millisecond)
+
+	result := cl.Get("dog")
+	if result.Err != nil {
+		t.Fatalf("error during initial get: %v", result.Err.Error())
+	}
+	if !result.Exists {
+		t.Fatalf("key does not exist in initial test")
+	}
+	if result.Value != "cat" {
+		t.Fatalf("expected \"cat\", got \"%s\"", result.Value)
+	}
+
+	cl.Delete("dog")
+
+	time.Sleep(500 * time.Millisecond)
+
+	result = cl.Get("dog")
+	if result.Exists {
+		t.Fatalf("key was not deleted")
+	}
+}
