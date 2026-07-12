@@ -1,6 +1,6 @@
 # Architecture
 
-My Raft key-value store implementation uses a layered approach to manage state and communication between the end user, key value store, and raft P2P network.
+My Raft key-value store implementation uses a layered approach to manage state and communication between the end user, the key value store, and the Raft P2P network.
 
 ## Diagram
 
